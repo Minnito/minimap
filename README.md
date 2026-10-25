@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Addon** | MiniMap (ID `minimap`, formerly `karte`) |
+| **Addon** | MiniMap (ID `minimap`) |
 | **Version** | 1.4.0 |
 | **Developer** | Minnito / Claude |
 | **Platform** | Client addon for the MC Launcher, API 6.2.1, Minecraft 26.3 |
