@@ -1,181 +1,182 @@
-# Entwicklerprotokoll: MiniMap
+# Developer Log: MiniMap
 
 | | |
 |---|---|
-| **Addon** | MiniMap (ID `minimap`, früher `karte`) |
+| **Addon** | MiniMap (ID `minimap`, formerly `karte`) |
 | **Version** | 1.3.0 |
-| **Entwickler** | Minnito |
-| **Plattform** | Client-Addon für den MC Launcher, API 6.2.1, Minecraft 26.3 |
-| **Sprache / Build** | Java 25 (`--release 25`), Gradle 9.4.1 (Wrapper) |
-| **Stand** | 25.10.2026 |
-| **Build** | `build/libs/minimap.jar`, 120 851 Byte, SHA-256 `13079ecae0ba0a8acf1c894ae20c82aabede057be9efc77cf3db900a7b535dca` |
-| **Selbsttest** | `gradlew runTest`: 21 von 21 Prüfungen bestanden (25.10.2026, 13:11) |
+| **Developer** | Minnito |
+| **Platform** | Client addon for the MC Launcher, API 6.2.1, Minecraft 26.3 |
+| **Language / build** | Java 25 (`--release 25`), Gradle 9.4.1 (wrapper) |
+| **Status** | 2026-10-25 |
+| **Build** | `build/libs/minimap.jar`, 120,851 bytes, SHA-256 `13079ecae0ba0a8acf1c894ae20c82aabede057be9efc77cf3db900a7b535dca` |
+| **Self-test** | `gradlew runTest`: 21 of 21 checks passed (2026-10-25, 13:11) |
+| **Download** | [Release v1.3.0](https://github.com/Minnito/minimap/releases/tag/v1.3.0) |
 
 ---
 
-## 1. Ziel
+## 1. Goal
 
-Eine Minimap und Weltkarte im Stil von JourneyMap und Xaero's Minimap, die ohne Fabric oder Forge direkt im Client des Launchers läuft:
+A minimap and world map in the style of JourneyMap and Xaero's Minimap that runs directly in the launcher's client, without Fabric or Forge:
 
-- Minimap und Weltkarte aus denselben, nebenbei erfassten Kartendaten
-- Kartentypen Tag, Nacht, Topo und Höhle, die Höhle auf **jeder** Y-Höhe
-- Entity-Radar mit echten Kreaturen-Gesichtern
-- Wegpunkte mit Manager und Anzeige in der Welt
-- Seed-Karte aus einem Chunkbase-Link: Biome und Gelände von Minecrafts eigenem Generator gerechnet, damit sie mit Chunkbase und mit der Welt übereinstimmt
+- Minimap and world map built from the same map data, collected in the background
+- Map types Day, Night, Topo and Cave, with the cave view at **any** Y level
+- Entity radar with real creature faces
+- Waypoints with a manager and in-world display
+- Seed map from a Chunkbase link: biomes and terrain computed by Minecraft's own generator, so it matches both Chunkbase and the actual world
 
-## 2. Funktionen
+## 2. Features
 
-### Minimap (`M` an/aus)
-- Quadrat oder Kreis; der Kreis dreht sich auf Wunsch mit der Blickrichtung
-- Größe einstellbar, 7 Zoomstufen (0,125 bis 8 GUI-Pixel je Block, Tasten `+` / `-`)
-- Kartentyp Automatisch, Tag, Nacht, Topo oder Höhle (Taste `[`). Automatisch nimmt unter Tage Höhle und nachts Nacht
-- Kompass (N, O, S, W) am Rand, Chunk-Gitter
-- Radar: Monster, Tiere, Haustiere, Dorfbewohner und Spieler einzeln filterbar, als Kopf oder als 2×2-Punkt
-- Vier Info-Zeilen (zwei oben, zwei unten): Spielzeit, Koordinaten, Biom, Dimension, FPS, Minecraft-Tag oder Lichtstufe
-- Wird in echten Bildschirmpixeln gezeichnet, damit sie auch bei hoher GUI-Skalierung scharf bleibt
+### Minimap (`M` toggles)
+- Square or circle; the circle can optionally rotate with your view direction
+- Adjustable size, 7 zoom levels (0.125 to 8 GUI pixels per block, keys `+` / `-`)
+- Map type Auto, Day, Night, Topo or Cave (key `[`). Auto uses Cave underground and Night at night
+- Compass (N, E, S, W) on the border, chunk grid
+- Radar: monsters, animals, pets, villagers and players, each filterable, shown as a head or a 2×2 dot
+- Four info lines (two above, two below): play time, coordinates, biome, dimension, FPS, Minecraft day or light level
+- Drawn in real screen pixels so it stays sharp even at high GUI scale
 
-### Weltkarte (`J`)
-- Kartentypen und Filter oben, Zoom links, Positionen von Spieler und Maus unten
-- Y-Slider für die Höhlenansicht; ein Wechsel der Ebene blendet in 220 ms über
-- Linke Maustaste halten = verschieben, Mausrad = Zoom, Pfeiltasten = 16 Blöcke verschieben, Leertaste = zurück zu dir, `F` = dir folgen, `C` = Koordinaten kopieren, `B` = Wegpunkt an der Maus
-- Rechtsklick-Menü: Wegpunkt setzen oder löschen, Wegpunkte verwalten, Koordinaten kopieren oder in den Chat, hier zentrieren, Entfernung anzeigen
-- Übersichtsstufe (je 4 × 4 Kacheln) für weites Herauszoomen
+### World map (`J`)
+- Map types and filters at the top, zoom on the left, player and mouse positions at the bottom
+- Y slider for the cave view; switching layers cross-fades over 220 ms
+- Hold left mouse button = pan, mouse wheel = zoom, arrow keys = pan 16 blocks, space = back to you, `F` = follow you, `C` = copy coordinates, `B` = waypoint at the mouse
+- Right-click menu: set or delete a waypoint, manage waypoints, copy coordinates or send them to chat, center here, show distance
+- Overview level (4 × 4 tiles each) for zooming far out
 
-### Seed-Karte
-- Seed aus einem Chunkbase-Share-Link (`…#seed=…&platform=java_…`) oder als Zahl
-- Zwei Modi: Gelände (Vanilla-Kartenfarben, Höhenschattierung, Wassertiefe, Wälder als Blätterdach) und Biomkarte in Chunkbase-Farben
-- Wird im Hintergrund gerechnet (bis zu 4 Threads) und als PNG zwischengespeichert, je Welt bzw. Server
-- Server können sie über die Funktion `seedmap` abschalten
+### Seed map
+- Seed from a Chunkbase share link (`…#seed=…&platform=java_…`) or as a plain number
+- Two modes: terrain (vanilla map colors, height shading, water depth, forests as canopy) and a biome map in Chunkbase colors
+- Computed in the background (up to 4 threads) and cached as PNG, per world or server
+- Servers can disable it via the `seedmap` feature
 
-### Wegpunkte (`B` = hier setzen, `N` = Manager)
-- In der Welt als farbiges Quadrat mit Symbol und Name; beim Hinschauen mit Entfernung (Einstellung: beim Hinschauen, immer, nie)
-- Manager mit Liste, Neu, Bearbeiten, Löschen; eigenes Symbol (1 bis 2 Zeichen) und Sichtbarkeit je Wegpunkt
-- Gespeichert über die Client-API (`Waypoints`). Wegpunkte anderer Addons werden angezeigt, aber nicht bearbeitet
+### Waypoints (`B` = set here, `N` = manager)
+- Shown in the world as a colored square with symbol and name; distance shown when you look at it (setting: when looking, always, never)
+- Manager with list, new, edit, delete; custom symbol (1 to 2 characters) and visibility per waypoint
+- Stored via the client API (`Waypoints`). Waypoints from other addons are shown but cannot be edited
 
-### Sonstiges
-- Sprachen Deutsch und Englisch, andere Sprachen fallen auf Englisch zurück. Zahlen im Format der Spielsprache (458,9 bzw. 458.9)
-- Einstellungen auf kurze Unterseiten verteilt (Minimap, Kreaturen & Wegpunkte, Info-Zeilen, Weltkarte & Chunkbase, Wegpunkte, Tasten), damit jede Seite ohne Scrollen passt
-- Alle Tasten frei belegbar
+### Other
+- German and English; other languages fall back to English. Numbers use the game language's format (458,9 or 458.9)
+- Settings split into short sub-pages (Minimap, Creatures & Waypoints, Info lines, World map & Chunkbase, Waypoints, Keys) so each page fits without scrolling
+- All keys can be rebound
 
-## 3. Architektur
+## 3. Architecture
 
-12 Klassen im Paket `karte`, zusammen 2 922 Zeilen.
+12 classes in package `karte`, 2,922 lines in total.
 
-| Klasse | Zeilen | Aufgabe |
+| Class | Lines | Purpose |
 |---|---:|---|
-| `Karte` | 187 | Einstieg (`client.api.Module`): Tasten, HUD, Einstellungen, Lebenszyklus (`join`, `leave`, `unload`), Selbsttest |
-| `Kartendaten` | 460 | Tastet geladene Chunks ab und malt je Block einen Pixel in Kacheln zu 256 × 256 Blöcken, getrennt nach Ebene. Reihenfolge: Ringe um den Spieler, nächste zuerst. Zeitbudget 4 ms je Tick |
-| `Hoehlen` | 264 | Höhlendaten für jede Y-Höhe: je Blocksäule die Böden (fester Block mit Luft darüber) mit Farbe und Decke. Daraus ergibt sich jede Höhe sofort |
-| `Minimap` | 298 | Setzt das Minimap-Bild auf der CPU aus den Kacheln zusammen; rechnet nur neu, wenn sich etwas geändert hat |
-| `Vollbild` | 500 | Weltkarte: Bedienung, Knöpfe, Rechtsklick-Menü, Überblendung, Seed-Karte als Unterlage |
-| `SeedKarte` | 477 | Biome und Geländehöhe aus dem Seed mit `MultiNoiseBiomeSource` / `NoiseBasedChunkGenerator`; Thread-Pool, PNG-Cache, Abgleich mit der echten Welt |
-| `Ansicht` | 248 | Umrechnung Welt ↔ Bildschirm (Mitte, Maßstab, Drehung); gemeinsames Zeichnen von Wegpunkten, Radar und Spielerpfeil |
-| `Gesicht` | 115 | Kreaturen-Gesicht aus der eigenen Textur: Modellteil `head`, größter Würfel, Fläche nach vorn. Funktioniert für alle Kreaturen ohne eigene Bilder |
-| `Wegpunkte` | 215 | Wegpunkte in der Welt und Manager |
-| `Biomfarben` | 38 | Biomfarben wie bei Chunkbase/Amidst; unbekannte Biome bekommen eine feste Farbe aus dem Namen |
-| `Umzug` | 101 | Einmaliger Umzug von der alten ID `karte` auf `minimap` (Einstellungen, Ordner, Tastenbelegung, Wegpunkt-Besitzer) |
-| `T` | 19 | Übersetzungen aus `assets/minimap/lang/` |
+| `Karte` | 187 | Entry point (`client.api.Module`): keys, HUD, settings, lifecycle (`join`, `leave`, `unload`), self-test |
+| `Kartendaten` | 460 | Scans loaded chunks and paints one pixel per block into tiles of 256 × 256 blocks, separated by layer. Order: rings around the player, nearest first. Time budget 4 ms per tick |
+| `Hoehlen` | 264 | Cave data for any Y level: per block column, the floors (solid block with air above) with color and ceiling. Any height can be derived from this instantly |
+| `Minimap` | 298 | Composes the minimap image on the CPU from the tiles; only recomputes when something changed |
+| `Vollbild` | 500 | World map: controls, buttons, right-click menu, cross-fade, seed map as underlay |
+| `SeedKarte` | 477 | Biomes and terrain height from the seed via `MultiNoiseBiomeSource` / `NoiseBasedChunkGenerator`; thread pool, PNG cache, comparison against the real world |
+| `Ansicht` | 248 | World ↔ screen conversion (center, scale, rotation); shared drawing of waypoints, radar and player arrow |
+| `Gesicht` | 115 | Creature face from its own texture: model part `head`, largest cube, front face. Works for all creatures without custom images |
+| `Wegpunkte` | 215 | In-world waypoints and the manager |
+| `Biomfarben` | 38 | Biome colors as in Chunkbase/Amidst; unknown biomes get a fixed color derived from their name |
+| `Umzug` | 101 | One-time migration from the old ID `karte` to `minimap` (settings, folders, key bindings, waypoint owner) |
+| `T` | 19 | Translations from `assets/minimap/lang/` |
 
-**Datenfluss:** `Kartendaten` (und darin `Hoehlen`) tasten jeden Tick im Zeitbudget Chunks ab → Kacheln als `NativeImage` + GPU-Textur → `Minimap` und `Vollbild` zeichnen daraus über `Ansicht`. `SeedKarte` liefert unter der erkundeten Karte die gerechnete Unterlage.
+**Data flow:** `Kartendaten` (and `Hoehlen` inside it) scan chunks every tick within the time budget → tiles as `NativeImage` + GPU texture → `Minimap` and `Vollbild` draw from them via `Ansicht`. `SeedKarte` supplies the computed underlay beneath the explored map.
 
-### Speicherorte
+### Storage locations
 
-| Was | Wo |
+| What | Where |
 |---|---|
-| Kartenkacheln | `client-modules/minimap/<welt>/<dimension>/<ebene>/<x>_<z>.png` |
-| Einzelspieler | im Weltordner unter `<welt>/minimap/` (Berechtigung `files`), damit die Karte mit der Welt wandert |
-| Höhlendaten | `<dimension>/hoehlen/<rx>_<rz>.bin` je Region (32 × 32 Chunks), gzip |
-| Seed-Cache | `seedkarte/<seed>_<dim>_<modus>_x<maßstab>_v2/` als PNG |
-| Einstellungen | `client-modules/minimap.properties` (Client-API `AddonConfig`) |
+| Map tiles | `client-modules/minimap/<world>/<dimension>/<layer>/<x>_<z>.png` |
+| Singleplayer | inside the world folder under `<world>/minimap/` (permission `files`), so the map travels with the world |
+| Cave data | `<dimension>/hoehlen/<rx>_<rz>.bin` per region (32 × 32 chunks), gzip |
+| Seed cache | `seedkarte/<seed>_<dim>_<mode>_x<scale>_v2/` as PNG |
+| Settings | `client-modules/minimap.properties` (client API `AddonConfig`) |
 
-Weltname: Server = Adresse (`localhost_25598`), Einzelspieler = `sp_` + Ordnername der Welt. Zwei Welten mit gleichem Anzeigenamen kommen sich dadurch nicht mehr in die Quere.
+World name: server = address (`localhost_25598`), singleplayer = `sp_` + the world's folder name. Two worlds with the same display name therefore no longer collide.
 
-## 4. Verlauf
+## 4. History
 
-Die Arbeit lief am 25.10.2026, von der Einarbeitung bis zum fertigen Build 1.3.0.
+All work happened on 2026-10-25, from onboarding to the finished 1.3.0 build.
 
-1. **Einarbeitung (ca. 00:11).** Grundwissen zur Client-API 6.2.1 zusammengetragen (`kb/Grundwissen-Client-Module.md`, Original-Doku in `kb/eclipse-docs.txt`) und das Projekt als Wissensgraph erfasst (`graphify-out/`).
-2. **Gerüst (ca. 00:27).** Gradle-Vorlage aufgesetzt: `build`, `runClient`, `install`, `runTest`, `publishAddon`. Minecraft und Libraries lädt der Build direkt von Mojang. Ohne Addon-Server nimmt er API und Client aus dem installierten Launcher.
-3. **Kern unter der ID `karte`.** Kartendaten, Minimap, Weltkarte, Höhlen, Seed-Karte, Radar mit Gesichtern.
-4. **Ideen-Report (`ideen-report-karte.md`).** Kompletter Scan mit Fehlerliste und Ideen. Die wichtigsten Punkte daraus sind umgesetzt (Abschnitt 5).
-5. **Nachbesserungen (`Verbesserungen.md`, 02:08).** Notiert: Icons der Weltkarte überarbeiten, Chunkbase-Karte einfügen können. Die Chunkbase-Karte ist eingebaut (Seed-Karte aus dem Chunkbase-Link); die Knöpfe der Weltkarte haben Beschriftung und Tooltips.
-6. **Umbenennung auf `minimap` (Version 1.3.0, bis 13:10).** Neue ID, Name „MiniMap“, Übersetzungen ausgelagert (de_de, en_us), Einstellungen auf Unterseiten aufgeteilt, Wegpunkt-Manager. `Umzug` übernimmt die Daten der alten ID beim ersten Start.
-7. **Build und Test (13:10 bis 13:11).** `minimap.jar` gebaut, `runTest` mit 21 von 21 Prüfungen bestanden.
+1. **Onboarding (approx. 00:11).** Collected background knowledge on client API 6.2.1 (`kb/Grundwissen-Client-Module.md`, original docs in `kb/eclipse-docs.txt`) and captured the project as a knowledge graph (`graphify-out/`).
+2. **Scaffold (approx. 00:27).** Set up the Gradle template: `build`, `runClient`, `install`, `runTest`, `publishAddon`. The build downloads Minecraft and its libraries directly from Mojang. Without an addon server it takes the API and client from the installed launcher.
+3. **Core under the ID `karte`.** Map data, minimap, world map, caves, seed map, radar with faces.
+4. **Ideas report (`ideen-report-karte.md`).** Full scan with a list of bugs and ideas. The most important items have been implemented (section 5).
+5. **Follow-ups (`Verbesserungen.md`, 02:08).** Noted: rework the world map icons, allow inserting the Chunkbase map. The Chunkbase map is built in (seed map from the Chunkbase link); the world map buttons have labels and tooltips.
+6. **Rename to `minimap` (version 1.3.0, until 13:10).** New ID, name "MiniMap", translations moved out (de_de, en_us), settings split into sub-pages, waypoint manager. `Umzug` takes over the data of the old ID on first launch.
+7. **Build and test (13:10 to 13:11).** Built `minimap.jar`, `runTest` passed 21 of 21 checks.
 
-## 5. Behobene Fehler und umgesetzte Ideen
+## 5. Fixed bugs and implemented ideas
 
-| Problem | Lösung | Nachweis |
+| Problem | Fix | Evidence |
 |---|---|---|
-| Seed-Geländehöhen passten nicht zur Welt (Abgleich: Höhe ±3 bei 0 von 7 Punkten) | Höhenberechnung und Abgleich überarbeitet | Test „Seed-Höhen = Welt ±2 (25/25)“ |
-| Alter Seed-Cache mit falsch gerechneten Kacheln blieb liegen | Cache-Version `v2` im Ordnernamen, alte Ordner werden beim Start gelöscht | `SeedKarte.CACHE_VERSION` |
-| Gesichter-Cache überlebte den Weltwechsel (Kuh #57 wurde zum Zombie #57) | `Gesicht.leeren()` in `Karte.leave()` | Code |
-| Gleichnamige Einzelspielerwelten teilten sich die Karte | Weltname aus dem Ordnernamen der Welt | Test „Weltname eindeutig“ |
-| Weites Herauszoomen lud ständig Kacheln nach | Übersichtsstufe aus 4 × 4 Kacheln, auch für die Seed-Karte | Tests „Übersicht (4 × 4 Kacheln)“, „Seed-Übersicht (1024 Blöcke)“ |
-| Testserver war eine flache Welt, die Seed-Karte also nicht prüfbar | `runTest` startet eine normale Welt mit Seed 42 und vergleicht Biome und Höhen an 25 Punkten | Tests „Seed-Biome = Welt“, „Seed-Höhen = Welt“ |
-| Wegpunkte hießen immer „Wegpunkt N“, ohne Liste und ohne Anzeige in der Welt | Wegpunkt-Manager, Symbole, Anzeige in der Welt mit Entfernung | Test „Wegpunkt anlegen, Symbol „T“, löschen, Entfernung „458,9m““ |
+| Seed terrain heights did not match the world (comparison: height ±3 at 0 of 7 points) | Reworked height computation and comparison | Test "Seed-Höhen = Welt ±2 (25/25)" |
+| Old seed cache with wrongly computed tiles stayed around | Cache version `v2` in the folder name; old folders are deleted on startup | `SeedKarte.CACHE_VERSION` |
+| Face cache survived world changes (cow #57 became zombie #57) | `Gesicht.leeren()` in `Karte.leave()` | Code |
+| Singleplayer worlds with the same name shared one map | World name taken from the world's folder name | Test "Weltname eindeutig" |
+| Zooming far out kept reloading tiles | Overview level built from 4 × 4 tiles, also for the seed map | Tests "Übersicht (4 × 4 Kacheln)", "Seed-Übersicht (1024 Blöcke)" |
+| Test server was a flat world, so the seed map could not be checked | `runTest` starts a normal world with seed 42 and compares biomes and heights at 25 points | Tests "Seed-Biome = Welt", "Seed-Höhen = Welt" |
+| Waypoints were always named "Wegpunkt N", with no list and no in-world display | Waypoint manager, symbols, in-world display with distance | Test "Wegpunkt anlegen, Symbol „T", löschen, Entfernung „458,9m"" |
 
 ## 6. Tests
 
-`gradlew runTest` startet einen lokalen Vanilla-Server (Port 25598, Seed 42, Offline-Modus) und das Spiel mit dem Addon. Das Addon prüft sich über `client.api.Testing` selbst. Ergebnis vom 25.10.2026:
+`gradlew runTest` starts a local vanilla server (port 25598, seed 42, offline mode) and the game with the addon. The addon checks itself via `client.api.Testing`. Result from 2026-10-25 (check names are output by the addon in German, translated in brackets):
 
 ```
-PASS Drehung hin und zurück
-PASS Norden oben, Osten rechts
-PASS Kacheln, Spirale beginnt beim Spieler
-PASS Nächster Ring zuerst, im Uhrzeigersinn ab Norden
-PASS Einstellungen: Hauptseite + kurze Unterseiten
-PASS Umzug: Wegpunkte von „karte“ gehören jetzt „minimap“
-PASS Übersetzungen geladen (de_DE: Minimap anzeigen)
-PASS Wegpunkt anlegen, Symbol „T“, löschen, Entfernung „458,9m“
-PASS Seed aus Chunkbase-Link lesen
-PASS Biom aus Seed berechnet (dark_forest)
-PASS Gelände aus Seed gemalt (854 ms je Kachel)
-PASS Höhenansicht für jede Y-Höhe
-PASS Karte gemalt
-PASS Tag, Nacht und Topo gespeichert
-PASS Höhlendaten nebenbei erfasst (49 Chunks)
-PASS Übersicht (4 × 4 Kacheln) fürs Herauszoomen gebaut
-PASS Seed-Übersicht (1024 Blöcke) gerechnet
-PASS Weltname eindeutig (localhost_25598)
-PASS Zombie-Gesicht aus der Textur (8, 8, 8 × 8)
-PASS Seed-Biome = Welt (25/25)
-PASS Seed-Höhen = Welt ±2 (25/25)
+PASS Drehung hin und zurück                              [rotation round trip]
+PASS Norden oben, Osten rechts                           [north up, east right]
+PASS Kacheln, Spirale beginnt beim Spieler               [tiles, spiral starts at the player]
+PASS Nächster Ring zuerst, im Uhrzeigersinn ab Norden    [nearest ring first, clockwise from north]
+PASS Einstellungen: Hauptseite + kurze Unterseiten       [settings: main page + short sub-pages]
+PASS Umzug: Wegpunkte von „karte" gehören jetzt „minimap"  [migration: waypoints now owned by minimap]
+PASS Übersetzungen geladen (de_DE: Minimap anzeigen)     [translations loaded]
+PASS Wegpunkt anlegen, Symbol „T", löschen, Entfernung „458,9m"  [create waypoint, symbol, delete, distance]
+PASS Seed aus Chunkbase-Link lesen                       [read seed from Chunkbase link]
+PASS Biom aus Seed berechnet (dark_forest)               [biome computed from seed]
+PASS Gelände aus Seed gemalt (854 ms je Kachel)          [terrain painted from seed, 854 ms per tile]
+PASS Höhenansicht für jede Y-Höhe                        [view for any Y level]
+PASS Karte gemalt                                        [map painted]
+PASS Tag, Nacht und Topo gespeichert                     [day, night and topo saved]
+PASS Höhlendaten nebenbei erfasst (49 Chunks)            [cave data collected, 49 chunks]
+PASS Übersicht (4 × 4 Kacheln) fürs Herauszoomen gebaut  [overview (4 × 4 tiles) built for zooming out]
+PASS Seed-Übersicht (1024 Blöcke) gerechnet              [seed overview (1024 blocks) computed]
+PASS Weltname eindeutig (localhost_25598)                [world name unique]
+PASS Zombie-Gesicht aus der Textur (8, 8, 8 × 8)         [zombie face from texture]
+PASS Seed-Biome = Welt (25/25)                           [seed biomes = world]
+PASS Seed-Höhen = Welt ±2 (25/25)                        [seed heights = world ±2]
 ```
 
-Die GitHub Action (`.github/workflows/build.yml`) baut bei jedem Push nur das Jar. `runTest` braucht OpenGL und läuft darum lokal.
+The GitHub Action (`.github/workflows/build.yml`) only builds the jar on every push. `runTest` needs OpenGL and therefore runs locally.
 
-## 7. Bekannte Grenzen
+## 7. Known limitations
 
-Diese Abkürzungen sind bewusst so gewählt und im Code mit `ponytail:` markiert:
+These shortcuts are deliberate and marked with `ponytail:` in the code:
 
-- **Kacheln bleiben im Speicher.** Alle gesehenen Kacheln bleiben bis zum Weltwechsel geladen (256 KB je Kachel und Ebene). Bei sehr großen Karten sollten Kacheln außer Sicht entladen werden (`Kartendaten`).
-- **Seed-Karte ohne Strukturen.** Bäume, Dörfer, Bauwerke und Seen über Meereshöhe fehlen, weil sie die komplette Chunk-Generierung bräuchten (`SeedKarte`).
-- **Minimap-Neuaufbau.** Bei großer Minimap und hoher GUI-Skalierung bis 512² Pixel je Neuaufbau, aber nur bei Bewegung um mindestens 1 Bildpunkt (`Minimap`).
-- **Gesichter-Cache.** Wechselt eine Kreatur ihre Variante, sieht man das erst nach einem Weltwechsel (`Gesicht`).
+- **Tiles stay in memory.** All seen tiles stay loaded until the world changes (256 KB per tile and layer). For very large maps, tiles out of view should be unloaded (`Kartendaten`).
+- **Seed map without structures.** Trees, villages, buildings and lakes above sea level are missing because they would require full chunk generation (`SeedKarte`).
+- **Minimap rebuild.** With a large minimap and high GUI scale, up to 512² pixels per rebuild, but only when moving by at least 1 pixel (`Minimap`).
+- **Face cache.** If a creature changes its variant, this only shows after a world change (`Gesicht`).
 
-Offen aus dem Ideen-Report: Kacheln und Höhlendaten atomar schreiben, Seed-Threads bei `.addon reload` beenden, Strukturen aus dem Seed, Seed-Gelände auf der Minimap, Karte als Bild exportieren.
+Still open from the ideas report: write tiles and cave data atomically, shut down seed threads on `.addon reload`, structures from the seed, seed terrain on the minimap, export the map as an image.
 
-## 8. Bauen und Starten
+## 8. Building and running
 
-Voraussetzung: JDK 25 oder neuer. Minecraft und Libraries lädt der erste Build einmalig nach `~/.gradle/caches/client-mc`.
+Requirement: JDK 25 or newer. The first build downloads Minecraft and its libraries once into `~/.gradle/caches/client-mc`.
 
 ```bash
 ./gradlew build        # → build/libs/minimap.jar
-./gradlew runClient    # Spiel mit Addon, offline als „Dev“, Ordner run/
-./gradlew runTest      # Testserver + Spiel, Selbsttest
-./gradlew install      # Jar ins Spiel kopieren; im Chat „.addon reload minimap“
+./gradlew runClient    # game with the addon, offline as "Dev", folder run/
+./gradlew runTest      # test server + game, self-test
+./gradlew install      # copy jar into the game; in chat ".addon reload minimap"
 ```
 
-Ohne erreichbaren Addon-Server nimmt der Build API und Client aus dem installierten Launcher (`%LOCALAPPDATA%/Programs/mc-launcher/resources/client.jar`, überschreibbar mit `-PclientJar=…`).
+Without a reachable addon server, the build takes the API and client from the installed launcher (`%LOCALAPPDATA%/Programs/mc-launcher/resources/client.jar`, override with `-PclientJar=…`).
 
-## 9. Tastenbelegung
+## 9. Key bindings
 
-| Taste | Aktion |
+| Key | Action |
 |---|---|
-| `J` | Weltkarte öffnen |
-| `M` | Minimap ein/aus |
-| `+` / `-` | Minimap vergrößern / verkleinern |
-| `[` | Kartentyp der Minimap wechseln |
-| `B` | Wegpunkt hier setzen (auf der Weltkarte: an der Maus) |
-| `N` | Wegpunkte verwalten |
-| `F`, `C`, Pfeiltasten, Leertaste | auf der Weltkarte: folgen, Koordinaten kopieren, verschieben, zu dir |
+| `J` | Open world map |
+| `M` | Toggle minimap |
+| `+` / `-` | Zoom minimap in / out |
+| `[` | Switch minimap map type |
+| `B` | Set waypoint here (on the world map: at the mouse) |
+| `N` | Manage waypoints |
+| `F`, `C`, arrow keys, space | on the world map: follow, copy coordinates, pan, back to you |
