@@ -1,0 +1,241 @@
+// Addon für den Client. Braucht ein JDK ≥ 25. Minecraft + Libraries lädt der Build einmalig von Mojang (~/.gradle/caches/client-mc).
+//   gradlew build                     → build/libs/<id>.jar (id = rootProject.name in settings.gradle); prüft Patches (check)
+//   gradlew runClient                 → Spiel mit Client + diesem Addon starten (offline als „Dev“, Spielordner run/)
+//                                       -Pserver=localhost:25565 → gleich auf einen Server; -Pplayer=Name
+//                                       --debug-jvm → wartet auf einen Debugger an Port 5005 (IntelliJ: einfach den Debug-Knopf)
+//   -Pminecraft=26.3                  → andere Minecraft-Version als in module.json (bauen, starten, testen);
+//                                       gradlew minecraftVersions zeigt, welche der Client unterstützt
+//   gradlew install                   → Jar ins Spiel kopieren (Standard run/, sonst -PgameDir=<Spielordner>). Läuft das Spiel,
+//                                       landet es als <id>.jar.update – im Chat „.addon reload <id>“ lädt es ohne Neustart
+//   gradlew runTest                   → lokaler Vanilla-Server + Spiel, Addon prüft sich mit client.api.Testing
+//   gradlew publishAddon -PaddonToken=… → Jar an den Addon-Server schicken (wartet dort auf Freigabe)
+// Andere Server-Adresse: -PclientServer=https://… (Standard http://localhost:8787, Maven-Repo darunter unter /maven).
+import groovy.json.JsonSlurper
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+
+plugins { id 'java' }
+
+def module = new JsonSlurper().parse(file('src/main/resources/module.json'))
+def mc = providers.gradleProperty('minecraft').getOrElse(module.minecraft)
+def addonServer = providers.gradleProperty('clientServer').getOrElse('http://localhost:8787')
+
+repositories {
+    // Modul-API (client:client-api), Patch-Prüfung und Client für runClient
+    maven {
+        url = "$addonServer/maven"
+        allowInsecureProtocol = true
+    }
+}
+
+// ───── Minecraft: steht auf keinem Maven-Repo, darum wie der Launcher von Mojang laden ─────
+def cache = new File(gradle.gradleUserHomeDir, "caches/client-mc/$mc")
+def fetch = { String url, File f ->
+    if (!f.exists()) {
+        logger.lifecycle("Lade ${f.name} …")
+        f.parentFile.mkdirs()
+        def tmp = new File(f.path + '.part')
+        new URL(url).withInputStream { i -> tmp.withOutputStream { it << i } }
+        tmp.renameTo(f)
+    }
+    f
+}
+def versionFile = new File(cache, "${mc}.json")
+if (!versionFile.exists())
+    fetch(new JsonSlurper().parse(new URL('https://piston-meta.mojang.com/mc/game/version_manifest_v2.json')).versions.find { it.id == mc }.url, versionFile)
+def version = new JsonSlurper().parse(versionFile)
+
+// Mojangs Regeln: ohne Regeln erlaubt, sonst entscheidet die letzte passende (os.name windows/osx/linux)
+def osName = System.getProperty('os.name').toLowerCase().with { it.contains('win') ? 'windows' : it.contains('mac') ? 'osx' : 'linux' }
+def allowed = { rules ->
+    if (!rules) return true
+    def ok = false
+    rules.each { r -> if (!r.os || r.os.name == null || r.os.name == osName) ok = r.action == 'allow' }
+    ok
+}
+def libs = version.libraries.findAll { it.downloads?.artifact && allowed(it.rules) }
+def mcJar = fetch(version.downloads.client.url, new File(cache, "${mc}.jar"))
+def minecraft = [mcJar] + libs.findAll { !it.name.contains('natives') }.collect { fetch(it.downloads.artifact.url, new File(cache, it.downloads.artifact.path)) }
+
+configurations { patchCheck; clientAgent }
+
+// Kein Addon-Server erreichbar? Dann API + Client aus dem installierten Launcher nehmen (-PclientJar=… überschreibt den Pfad)
+def localClient = file(providers.gradleProperty('clientJar').getOrElse("${System.getenv('LOCALAPPDATA')}/Programs/mc-launcher/resources/client.jar"))
+
+dependencies {
+    compileOnly localClient.exists() ? files(localClient) : "client:client-api:${module.api}"
+    compileOnly files(minecraft)
+    patchCheck "client:client-check:${module.api}"
+    clientAgent localClient.exists() ? files(localClient) : "client:client:${module.api}"
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.release = 25
+    options.encoding = 'UTF-8'
+}
+
+// META-INF/services/client.api.Module aus module.json „main“ – damit der Client die Klasse findet
+def services = layout.buildDirectory.dir('generated/services')
+def writeServices = tasks.register('services') {
+    inputs.property('main', module.main)
+    outputs.dir(services)
+    doLast { services.get().file('META-INF/services/client.api.Module').asFile.with { parentFile.mkdirs(); text = module.main + '\n' } }
+}
+processResources { from(writeServices) }
+
+jar { archiveFileName = "${rootProject.name}.jar" }
+
+// Addon mit Patches (module.json „patches“): gradlew check prüft jeden gegen das echte Minecraft – Ziel vorhanden,
+// Hook-Signatur passend, Bytecode gültig. Läuft auch bei gradlew build.
+def checkPatches = tasks.register('checkPatches', JavaExec) {
+    onlyIf { module.patches }
+    classpath = sourceSets.main.output + configurations.patchCheck + files(minecraft)
+    mainClass = 'Check'
+    args file('src/main/resources/module.json').absolutePath
+}
+tasks.named('check') { dependsOn checkPatches }
+
+def gameDir = providers.gradleProperty('gameDir').map { file(it) }.getOrElse(file('run'))
+
+tasks.register('install') {
+    dependsOn jar
+    doLast {
+        def dir = new File(gameDir, 'client-modules')
+        dir.mkdirs()
+        def target = new File(dir, "${rootProject.name}.jar")
+        // Vorhandenes Jar hält ein laufendes Spiel fest → daneben ablegen; .addon reload oder der nächste Start spielt es ein
+        def dest = target.exists() ? new File(dir, "${rootProject.name}.jar.update") : target
+        Files.copy(jar.archiveFile.get().asFile.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        logger.lifecycle("→ $dest")
+    }
+}
+
+// ───── runClient: offline mit dem Client starten ─────
+// Assets (~600 MB): vom Launcher oder offiziellen Launcher mitbenutzen, sonst einmalig laden
+def assetsDir = { ->
+    def id = version.assetIndex.id
+    def home = System.getProperty('user.home'), appData = System.getenv('APPDATA') ?: home
+    def found = [providers.gradleProperty('assetsDir').orNull, "$appData/mc-launcher/meta/assets", "$appData/.minecraft/assets",
+                 "$home/Library/Application Support/minecraft/assets", "$home/.minecraft/assets"]
+        .findAll { it }.collect { new File(it) }.find { new File(it, "indexes/${id}.json").exists() }
+    if (found) return found
+    def dir = new File(cache, 'assets')
+    def index = fetch(version.assetIndex.url, new File(dir, "indexes/${id}.json"))
+    logger.lifecycle('Lade Assets (einmalig) …')
+    new JsonSlurper().parse(index).objects.values().parallelStream().forEach { o ->
+        def h = o.hash
+        fetch("https://resources.download.minecraft.net/${h.substring(0, 2)}/$h", new File(dir, "objects/${h.substring(0, 2)}/$h"))
+    }
+    dir
+}
+
+// Minecraft-Versionen, auf denen der Client läuft (client/minecraft.json im Client-Jar; ältere Clients ohne Datei: module.json)
+def supported = { ->
+    def zip = new java.util.zip.ZipFile(configurations.clientAgent.singleFile)
+    try {
+        def entry = zip.getEntry('client/minecraft.json')
+        entry ? new JsonSlurper().parse(zip.getInputStream(entry)) as List : [module.minecraft]
+    } finally {
+        zip.close()
+    }
+}
+
+tasks.register('minecraftVersions') {
+    group = 'client'
+    description = 'Minecraft-Versionen, auf denen der Client läuft'
+    doLast { logger.lifecycle("Client ${module.api} läuft auf Minecraft: ${supported().join(', ')} (gewählt: $mc)") }
+}
+
+// Spiel starten: offline als <player>, Spielordner dir, optional gleich auf server (host:port)
+def client = { JavaExec t, File dir, String player, String server, List<String> extraJvm ->
+    def natives = new File(cache, 'natives')
+    t.group = 'client'
+    t.workingDir = dir
+    t.classpath = files(minecraft) + files({ libs.findAll { it.name.contains('natives') }.collect { fetch(it.downloads.artifact.url, new File(cache, it.downloads.artifact.path)) } })
+    t.mainClass = version.mainClass
+    t.doFirst {
+        if (!(mc in supported())) throw new GradleException("Client ${module.api} läuft nicht auf Minecraft $mc – unterstützt: ${supported().join(', ')} (-Pminecraft=…)")
+        def vars = [natives_directory: natives.path, launcher_name: 'client-dev', launcher_version: '1']
+        t.jvmArgs(['-Xmx2G', '-XX:+UseZGC', '-XX:+UseCompactObjectHeaders', "-javaagent:${configurations.clientAgent.singleFile}"] + extraJvm
+            + version.arguments.jvm.findAll { it instanceof String && !it.contains('classpath') && it != '-cp' }
+                .collect { it.replaceAll(/\$\{(\w+)\}/) { all, k -> vars[k] ?: all } })
+        t.args(['--username', player, '--version', mc, '--gameDir', dir.path, '--assetsDir', assetsDir().path,
+                '--assetIndex', version.assetIndex.id, '--uuid', UUID.nameUUIDFromBytes("OfflinePlayer:$player".bytes).toString(),
+                '--accessToken', '0', '--versionType', 'release'] + (server ? ['--quickPlayMultiplayer', server] : []))
+    }
+}
+
+tasks.register('runClient', JavaExec) {
+    dependsOn 'install'
+    client(it, gameDir, providers.gradleProperty('player').getOrElse('Dev'), providers.gradleProperty('server').orNull, [])
+}
+
+// ───── runTest: lokaler Vanilla-Server + Spiel, das Addon prüft mit client.api.Testing und beendet mit Testing.done() ─────
+// Eigene Ordner (build/test-server, build/test-client), damit run/ unberührt bleibt. Schlägt fehl bei FAIL oder Zeitüberschreitung.
+def testDir = layout.buildDirectory.dir('test-client').get().asFile, serverDir = layout.buildDirectory.dir('test-server').get().asFile
+def testServer = null
+
+def startServer = tasks.register('startTestServer') {
+    doLast {
+        def jar = fetch(version.downloads.server.url, new File(cache, "server-${mc}.jar"))
+        serverDir.mkdirs()
+        new File(serverDir, 'eula.txt').text = 'eula=true\n'
+        // Karte: normale Welt mit festem Seed, damit der Selbsttest die Seed-Karte (Biome + Höhen) gegen echte Generierung prüfen kann
+        // white-list/enforce-secure-profile aus: neu erzeugte Server haben beides an – der Offline-Testspieler käme sonst nicht
+        // hinein und der Test liefe in einer Einzelspielerwelt mit zufälligem Seed
+        new File(serverDir, 'server.properties').text = 'online-mode=false\nserver-port=25598\nlevel-name=welt-seed42\nlevel-seed=42\n' +
+            'white-list=false\nenforce-secure-profile=false\n' +
+            'spawn-protection=0\nspawn-monsters=false\nview-distance=4\nsimulation-distance=4\n'
+        def op = UUID.nameUUIDFromBytes('OfflinePlayer:Test'.bytes)
+        new File(serverDir, 'ops.json').text = '[{"uuid":"' + op + '","name":"Test","level":4,"bypassesPlayerLimit":false}]'
+        def log = new File(serverDir, 'server.out')
+        testServer = new ProcessBuilder(System.getProperty('java.home') + '/bin/java', '-Xmx1G', '-jar', jar.path, 'nogui')
+            .directory(serverDir).redirectErrorStream(true).redirectOutput(log).start()
+        def deadline = System.currentTimeMillis() + 180_000
+        while (!(log.exists() && log.text.contains('Done ('))) {
+            if (!testServer.alive || System.currentTimeMillis() > deadline) throw new GradleException("Test-Server startet nicht – siehe $log")
+            sleep 500
+        }
+        logger.lifecycle('Test-Server läuft (localhost:25598)')
+    }
+}
+def stopServer = tasks.register('stopTestServer') {
+    doLast { testServer?.destroy() }
+}
+
+tasks.register('runTest', JavaExec) {
+    dependsOn jar, startServer
+    finalizedBy stopServer
+    timeout = java.time.Duration.ofMinutes(6)
+    client(it, testDir, 'Test', 'localhost:25598', ['-Dclient.test=true'])
+    def result = new File(testDir, 'client-test-result.txt')
+    doFirst {
+        result.delete()
+        def mods = new File(testDir, 'client-modules')
+        mods.mkdirs()
+        Files.copy(jar.archiveFile.get().asFile.toPath(), new File(mods, "${rootProject.name}.jar").toPath(), StandardCopyOption.REPLACE_EXISTING)
+    }
+    doLast {
+        if (!result.exists()) throw new GradleException('Kein Testergebnis – Testing.done() nicht aufgerufen? Log: ' + new File(testDir, 'logs/latest.log'))
+        def lines = result.readLines()
+        lines.each { logger.lifecycle(it) }
+        if (lines.any { it.startsWith('FAIL') }) throw new GradleException("${lines.count { it.startsWith('FAIL') }} Prüfung(en) fehlgeschlagen")
+    }
+}
+
+// ───── publishAddon: zur Freigabe an den Addon-Server ─────
+tasks.register('publishAddon') {
+    dependsOn 'build'
+    doLast {
+        def token = providers.gradleProperty('addonToken').orNull
+        if (!token) throw new GradleException('-PaddonToken=<dein Entwickler-Token> angeben (bekommst du vom Betreiber des Addon-Servers)')
+        def res = HttpClient.newHttpClient().send(HttpRequest.newBuilder(URI.create("$addonServer/modules/${rootProject.name}/upload"))
+            .header('Authorization', "Bearer $token").header('Content-Type', 'application/java-archive')
+            .POST(HttpRequest.BodyPublishers.ofFile(jar.archiveFile.get().asFile.toPath())).build(), HttpResponse.BodyHandlers.ofString())
+        if (res.statusCode() != 200) throw new GradleException("Upload abgelehnt (${res.statusCode()}): ${res.body()}")
+        logger.lifecycle("Hochgeladen – wartet auf Freigabe: ${res.body()}")
+    }
+}

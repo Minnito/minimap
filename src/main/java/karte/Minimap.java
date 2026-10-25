@@ -1,0 +1,298 @@
+package karte;
+
+import client.api.AddonConfig;
+import client.api.Draw;
+import client.api.HudElement;
+import client.api.Setting;
+import com.mojang.blaze3d.platform.NativeImage;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
+import net.minecraft.world.level.LightLayer;
+import net.minecraft.world.level.levelgen.Heightmap;
+
+// Minimap im Stil von JourneyMap: Bild aus den Kartenkacheln (Quadrat oder Kreis, optional mit Blickrichtung gedreht),
+// Rahmen mit Kompass, Wegpunkte, Entity-Radar, Spielerpfeil und vier Info-Zeilen (1–2 oben, 3–4 unten).
+final class Minimap {
+    static final double[] ZOOM = {0.125, 0.25, 0.5, 1, 2, 4, 8};   // GUI-Pixel je Block
+    private static final int ZEILE = 12;
+
+    enum Modus {
+        AUTO, TAG, NACHT, TOPO, HOEHLE;
+
+        String text() {
+            return this == AUTO ? T.t("modus.auto") : T.t("typ." + name().toLowerCase());
+        }
+    }
+
+    enum Info {
+        LEER, ZEIT, ORT, BIOM, DIMENSION, FPS, TAG, LICHT;
+
+        String text() {
+            return T.t("info." + name().toLowerCase());
+        }
+    }
+
+    private final AddonConfig cfg;
+    private final Kartendaten daten;
+    final Ansicht.Filter filter;
+    private boolean an, kreis, drehen, kompass, gitter;
+    private int size, zoom;
+    private Modus modus;
+    private final Info[] slots = new Info[4];
+
+    private NativeImage bild;
+    private Identifier bildId;
+    private int bildRes;
+    private Object[] zuletzt = {};   // Stand des letzten Bildes – nur neu rechnen, wenn sich etwas geändert hat
+
+    Minimap(AddonConfig cfg, Kartendaten daten) {
+        this.cfg = cfg;
+        this.daten = daten;
+        filter = new Ansicht.Filter(cfg, "mm_");
+        an = cfg.bool("mm_an", true);
+        kreis = cfg.bool("mm_kreis", false);
+        drehen = cfg.bool("mm_drehen", false);
+        kompass = cfg.bool("mm_kompass", true);
+        gitter = cfg.bool("mm_gitter", false);
+        size = cfg.number("size", 128);
+        zoom = Math.clamp(cfg.number("mm_zoomstufe", 2), 0, ZOOM.length - 1);
+        modus = Modus.valueOf(cfg.text("mm_modus", "AUTO"));
+        Info[] std = {Info.LEER, Info.ZEIT, Info.ORT, Info.BIOM};
+        for (int i = 0; i < 4; i++) slots[i] = Info.valueOf(cfg.text("mm_info" + i, std[i].name()));
+    }
+
+    void umschalten() {
+        cfg.set("mm_an", an = !an);
+    }
+
+    void zoom(int d) {
+        cfg.set("mm_zoomstufe", zoom = Math.clamp(zoom + d, 0, ZOOM.length - 1));
+    }
+
+    void naechsterModus() {
+        modus = Modus.values()[(modus.ordinal() + 1) % Modus.values().length];
+        cfg.set("mm_modus", modus.name());
+    }
+
+    /** Welche Ebene die Minimap gerade zeigt. */
+    Kartendaten.Ebene ebene() {
+        var mc = Minimap.mc();
+        var p = mc.player;
+        int schicht = p == null ? 64 : p.getBlockY();   // Höhlenansicht genau auf deiner Höhe
+        return switch (modus) {
+            case TAG -> Kartendaten.Ebene.of(Kartendaten.Typ.TAG);
+            case NACHT -> Kartendaten.Ebene.of(Kartendaten.Typ.NACHT);
+            case TOPO -> Kartendaten.Ebene.of(Kartendaten.Typ.TOPO);
+            case HOEHLE -> new Kartendaten.Ebene(Kartendaten.Typ.HOEHLE, schicht);
+            case AUTO -> {
+                if (p != null && (mc.level.dimensionType().hasCeiling() || unterTage())) yield new Kartendaten.Ebene(Kartendaten.Typ.HOEHLE, schicht);
+                yield Kartendaten.Ebene.of(nacht() ? Kartendaten.Typ.NACHT : Kartendaten.Typ.TAG);
+            }
+        };
+    }
+
+    // Unter Tage oder drinnen: mehr als 3 Blöcke unter der Oberfläche
+    private static boolean unterTage() {
+        var mc = mc();
+        var b = mc.player.blockPosition();
+        return b.getY() < mc.level.getHeight(Heightmap.Types.WORLD_SURFACE, b.getX(), b.getZ()) - 3;
+    }
+
+    static boolean nacht() {
+        long t = mc().level.getOverworldClockTime() % 24000;
+        return t >= 13000 && t < 23000;
+    }
+
+    HudElement hud() {
+        int oben = zeilen(0, 2), unten = zeilen(2, 4);
+        return new HudElement(Karte.ID, T.t("hud.minimap"), 1, 0, -size - 8, 6, size, oben + size + unten + 4, this::zeichne).visibleIf(() -> an);
+    }
+
+    private int zeilen(int von, int bis) {
+        int n = 0;
+        for (int i = von; i < bis; i++) if (slots[i] != Info.LEER) n++;
+        return n * ZEILE;
+    }
+
+    private void zeichne(GuiGraphicsExtractor g, int x, int y) {
+        var mc = mc();
+        var p = mc.player;
+        if (p == null || mc.level == null) return;
+        int my = y + zeilen(0, 2) + 2;
+        float half = size / 2f;
+
+        var a = new Ansicht();
+        a.cx = p.getX();
+        a.cz = p.getZ();
+        a.scale = ZOOM[zoom];
+        a.ox = x + half;
+        a.oy = my + half;
+        a.drehung(kreis && drehen ? p.getYRot() : 180);
+
+        // Rahmen
+        if (kreis) {
+            Draw.circle(g, (int) a.ox, (int) a.oy, (int) half + 3, 0xFF15151A);
+            Draw.circle(g, (int) a.ox, (int) a.oy, (int) half + 2, 0xFF5A5A64);
+        } else {
+            Draw.roundRect(g, x - 3, my - 3, size + 6, size + 6, 3, 0xFF15151A);
+            Draw.roundRect(g, x - 2, my - 2, size + 4, size + 4, 2, 0xFF5A5A64);
+        }
+        // Wie Xaero: Karte und Markierungen in echten Bildschirmpixeln, unabhängig von der GUI-Skalierung
+        float k = mc.getWindow().getGuiScale();
+        bild(a, ebene(), Math.min(512, Math.round(size * k)));
+        Draw.image(g, bildId, x, my, size, size, bildRes, bildRes);
+
+        g.pose().pushMatrix();
+        g.pose().scale(1 / k, 1 / k);
+        a.ox *= k;
+        a.oy *= k;
+        a.scale *= k;
+        a.schrift = k;
+        var rand = new Ansicht.Rand(kreis, (half - 2) * k, (half - 2) * k);
+        a.wegpunkte(g, filter, rand);
+        a.radar(g, filter, rand, 12);
+        a.spieler(g, 15);
+        g.pose().popMatrix();
+        a.ox /= k;
+        a.oy /= k;
+        a.scale /= k;
+        if (kompass) kompass(g, a, new Ansicht.Rand(kreis, half - 2, half - 2));
+
+        int ly = y;
+        for (int i = 0; i < 4; i++) {
+            if (i == 2) ly = my + size + 4;
+            if (slots[i] == Info.LEER) continue;
+            zeile(g, info(slots[i]), x + size / 2, ly);
+            ly += ZEILE;
+        }
+    }
+
+    private void kompass(GuiGraphicsExtractor g, Ansicht a, Ansicht.Rand rand) {
+        var font = mc().font;
+        String[] namen = {T.t("kompass.n"), T.t("kompass.o"), T.t("kompass.s"), T.t("kompass.w")};
+        int[][] dir = {{0, -1}, {1, 0}, {0, 1}, {-1, 0}};
+        for (int i = 0; i < 4; i++) {
+            float dx = a.sx(a.cx + dir[i][0] * 1e4, a.cz + dir[i][1] * 1e4) - a.ox;
+            float dy = a.sy(a.cx + dir[i][0] * 1e4, a.cz + dir[i][1] * 1e4) - a.oy;
+            float[] e = rand.klemmen(dx, dy);
+            int px = Math.round(a.ox + e[0]), py = Math.round(a.oy + e[1]);
+            Draw.circle(g, px, py, 6, 0xE0101014);
+            Draw.text(g, namen[i], px - font.width(namen[i]) / 2 + 1, py - 3);
+        }
+    }
+
+    private static void zeile(GuiGraphicsExtractor g, Component text, int mitte, int y) {
+        int w = mc().font.width(text);
+        Ansicht.rechteck(g, mitte - w / 2 - 3, y, w + 6, ZEILE - 1, 0xB0000000);
+        Draw.text(g, text, mitte - w / 2, y + 2);
+    }
+
+    static Component info(Info i) {
+        var mc = mc();
+        var p = mc.player;
+        var b = p.blockPosition();
+        long t = mc.level.getOverworldClockTime();
+        return switch (i) {
+            case LEER -> Component.empty();
+            case ZEIT -> Component.literal(String.format("%02d:%02d", (t / 1000 + 6) % 24, (t % 1000) * 60 / 1000));
+            case ORT -> Component.literal(b.getX() + ", " + b.getY() + ", " + b.getZ());
+            case BIOM -> biom(b);
+            case DIMENSION -> Component.literal(mc.level.dimension().identifier().getPath());
+            case FPS -> Component.literal(T.t("info.fps.wert", mc.getFps()));
+            case TAG -> Component.literal(T.t("info.tag.wert", t / 24000 + 1));
+            case LICHT -> Component.literal(T.t("info.licht.wert", mc.level.getLightEngine().getLayerListener(LightLayer.BLOCK).getLightValue(b)));
+        };
+    }
+
+    static Component biom(net.minecraft.core.BlockPos b) {
+        return mc().level.getBiome(b).unwrapKey()
+            .<Component>map(k -> Component.translatable(k.identifier().toLanguageKey("biome")))
+            .orElse(Component.literal("?"));
+    }
+
+    // Kartenbild auf der CPU zusammensetzen: so gehen Kreisform und Drehung ohne Schablonen-Tricks
+    // ponytail: bei großer Karte und hoher GUI-Skalierung bis 512² Pixel je Neuaufbau; nur bei Bewegung um ≥ 1 Bildpunkt neu
+    private void bild(Ansicht a, Kartendaten.Ebene e, int res) {
+        if (bild == null || bildRes != res) {
+            bild = new NativeImage(res, res, true);
+            bildId = Draw.texture(Karte.ID, "minimap", bild);   // gleicher Name ersetzt die alte Textur
+            bildRes = res;
+            zuletzt = new Object[0];
+        }
+        double bpt = size / (a.scale * res);   // Blöcke je Bildpunkt
+        Object[] stand = {Math.floor(a.cx / bpt), Math.floor(a.cz / bpt), a.fx, a.fz, a.scale, e, daten.version(), kreis, gitter, res};
+        if (Arrays.equals(stand, zuletzt)) return;
+        zuletzt = stand;
+
+        double half = res / 2.0;
+        for (int j = 0; j < res; j++) {
+            double v = j + 0.5 - half;
+            for (int i = 0; i < res; i++) {
+                double u = i + 0.5 - half;
+                if (kreis && u * u + v * v > half * half) {
+                    bild.setPixel(i, j, 0);
+                    continue;
+                }
+                double bu = u * bpt, bv = v * bpt;      // Blöcke nach rechts / unten
+                double wx = a.cx + bu * a.rx - bv * a.fx, wz = a.cz + bu * a.rz - bv * a.fz;
+                int c = daten.pixel(e, (int) Math.floor(wx), (int) Math.floor(wz));
+                if (c == 0) c = 0xFF101014;             // unerkundet
+                if (gitter && (wx - 16 * Math.floor(wx / 16) < bpt || wz - 16 * Math.floor(wz / 16) < bpt))
+                    c = 0xFF000000 | Kartendaten.darker(c & 0xFFFFFF, 0.6f);
+                bild.setPixel(i, j, c);
+            }
+        }
+        Draw.upload(bildId);
+    }
+
+    // Einstellungen in kurzen Seiten: der Client baut die Liste nach jedem Schalter neu auf und springt dabei nach oben –
+    // ohne Scrollen gibt es nichts, wohin er springen kann
+    Setting anzeigen() {
+        return Setting.toggle(T.t("mm.anzeigen"), T.t("mm.anzeigen.info"), () -> an, v -> cfg.set("mm_an", an = v));
+    }
+
+    List<Setting> seiteMinimap() {
+        return List.of(
+            Setting.choice(T.t("mm.form"), null, List.of(false, true), () -> kreis,
+                v -> cfg.set("mm_kreis", kreis = v), v -> T.t(v ? "mm.form.kreis" : "mm.form.quadrat")),
+            Setting.toggle(T.t("mm.drehen"), T.t("mm.drehen.info"), () -> drehen,
+                v -> cfg.set("mm_drehen", drehen = v)).visibleIf(() -> kreis),
+            Setting.slider(T.t("mm.groesse"), T.t("mm.groesse.info"), 64, 256, () -> size, v -> cfg.set("size", size = v), v -> T.t("mm.groesse.wert", v)),
+            Setting.choice(T.t("mm.zoom"), T.t("mm.zoom.info"), List.of(0, 1, 2, 3, 4, 5, 6), () -> zoom,
+                v -> cfg.set("mm_zoomstufe", zoom = v), v -> T.t("mm.zoom.wert", Math.round(size / ZOOM[v] / 2))),
+            Setting.choice(T.t("mm.typ"), T.t("mm.typ.info"), List.of(Modus.values()),
+                () -> modus, v -> cfg.set("mm_modus", (modus = v).name()), Modus::text),
+            Setting.toggle(T.t("mm.kompass"), T.t("mm.kompass.info"), () -> kompass, v -> cfg.set("mm_kompass", kompass = v)),
+            Setting.toggle(T.t("mm.gitter"), null, () -> gitter, v -> cfg.set("mm_gitter", gitter = v)));
+    }
+
+    List<Setting> seiteKreaturen() {
+        var l = new ArrayList<Setting>();
+        for (var art : Ansicht.Art.values())
+            l.add(Setting.toggle(art.text(), null, () -> filter.zeigt(art), v -> filter.setze(art, v)));
+        l.add(Setting.choice(T.t("mm.kreaturen"), T.t("mm.kreaturen.info"),
+            List.of(true, false), () -> filter.koepfe, filter::setzeKoepfe, v -> T.t(v ? "mm.koepfe" : "mm.punkte")));
+        l.add(Setting.toggle(T.t("mm.wegpunkte"), null, () -> filter.wegpunkte, filter::setzeWegpunkte));
+        l.add(Setting.toggle(T.t("mm.namen"), null, () -> filter.namen, filter::setzeNamen).visibleIf(() -> filter.wegpunkte));
+        return l;
+    }
+
+    List<Setting> seiteInfo() {
+        var l = new ArrayList<Setting>();
+        for (int i = 0; i < 4; i++) {
+            int n = i;
+            l.add(Setting.choice(T.t(n < 2 ? "mm.zeile.oben" : "mm.zeile.unten", n + 1), null, List.of(Info.values()), () -> slots[n],
+                v -> cfg.set("mm_info" + n, (slots[n] = v).name()), Info::text));
+        }
+        return l;
+    }
+
+    static Minecraft mc() {
+        return Minecraft.getInstance();
+    }
+}

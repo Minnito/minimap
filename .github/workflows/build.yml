@@ -1,0 +1,20 @@
+# Baut das Addon bei jedem Push und legt das Jar als Artefakt ab. Repository-Variable CLIENT_SERVER = Adresse des
+# Addon-Servers (für die Maven-Abhängigkeiten), z. B. https://addons.example.com
+# runTest (Spiel + Server) braucht eine Grafikkarte bzw. OpenGL und läuft darum lokal, nicht hier.
+name: build
+on: [push, pull_request]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 25
+      - uses: gradle/actions/setup-gradle@v4
+      - run: chmod +x gradlew && ./gradlew build -PclientServer=${{ vars.CLIENT_SERVER }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: addon
+          path: build/libs/*.jar

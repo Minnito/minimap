@@ -1,0 +1,215 @@
+package karte;
+
+import client.api.AddonConfig;
+import client.api.Draw;
+import client.api.HudElement;
+import client.api.Notify;
+import client.api.Page;
+import client.api.Setting;
+import client.api.Waypoints;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.phys.Vec3;
+
+// Wegpunkte wie bei Xaero: in der Welt als farbiges Quadrat mit Symbol und Name, beim Hinschauen mit Entfernung;
+// dazu ein Manager (Liste, Neu, Bearbeiten, Löschen). Gespeichert über die Client-API (Waypoints), Symbol und
+// Sichtbarkeit je Wegpunkt in der eigenen Config. Fremde Wegpunkte (anderer Addons) werden gezeigt, aber nicht bearbeitet.
+final class Wegpunkte {
+    static final String ADDON = Karte.ID;
+    private static final int HINSCHAUEN_PX = 14;          // so nah am Fadenkreuz gilt ein Wegpunkt als angeschaut
+    private static final List<String> ENTFERNUNG = List.of("hin", "immer", "nie");   // Schlüssel wp.entf.<…>
+    private static final int[] FARBEN = {0xFFFF5555, 0xFF55FF55, 0xFF5599FF, 0xFFFFD040, 0xFFFF79C6, 0xFF40E0E0, 0xFFFFFFFF};
+
+    private final AddonConfig cfg;
+    private boolean inWelt;
+    private int entfernung;
+
+    Wegpunkte(AddonConfig cfg) {
+        this.cfg = cfg;
+        inWelt = cfg.bool("wp_welt", true);
+        entfernung = Math.clamp(cfg.number("wp_entfernung", 0), 0, 2);
+    }
+
+    // ───── Symbol und Sichtbarkeit je Wegpunkt ─────
+    private static String schluessel(Waypoints.Waypoint w) {
+        return w.dimension() + "|" + w.name();
+    }
+
+    /** Symbol im Quadrat: eigenes (1–2 Zeichen) oder der Anfangsbuchstabe. */
+    static String symbol(Waypoints.Waypoint w) {
+        String s = AddonConfig.of(ADDON).text("wp_sym." + schluessel(w), "");
+        if (!s.isBlank()) return s;
+        return w.name().isEmpty() ? "?" : w.name().substring(0, 1).toUpperCase(Locale.ROOT);
+    }
+
+    static boolean sichtbar(Waypoints.Waypoint w) {
+        return AddonConfig.of(ADDON).bool("wp_an." + schluessel(w), true);
+    }
+
+    static boolean eigen(Waypoints.Waypoint w) {
+        return w.addon().equals(ADDON);
+    }
+
+    static List<Waypoints.Waypoint> hier() {
+        String dim = Waypoints.dimension();
+        return Waypoints.all().stream().filter(w -> w.dimension().equals(dim)).toList();
+    }
+
+    static String freierName(String basis) {
+        var namen = new HashSet<String>();
+        for (var w : Waypoints.all()) if (eigen(w)) namen.add(w.name());
+        if (!namen.contains(basis)) return basis;
+        int n = 2;
+        while (namen.contains(basis + " " + n)) n++;
+        return basis + " " + n;
+    }
+
+    static String entfernungText(double d) {
+        return String.format(T.locale(), d < 1000 ? "%.1fm" : "%.0fm", d);   // Deutsch 458,9m – Englisch 458.9m
+    }
+
+    private static double abstand(Waypoints.Waypoint w) {
+        var p = Minecraft.getInstance().player;
+        return p == null ? 0 : Math.sqrt(p.getEyePosition().distanceToSqr(Vec3.atCenterOf(w.pos())));
+    }
+
+    // ───── In der Welt (HUD-Element über den ganzen Bildschirm, Draw.project rechnet absolut) ─────
+    HudElement hud() {
+        return new HudElement(Karte.ID + ".wegpunkte", T.t("hud.wegpunkte"), 0, 0, 0, 0, 1, 1, this::zeichne).visibleIf(() -> inWelt);
+    }
+
+    private void zeichne(GuiGraphicsExtractor g, int x0, int y0) {
+        var mc = Minecraft.getInstance();
+        if (mc.player == null || mc.level == null) return;
+        var font = mc.font;
+        int mx = mc.getWindow().getGuiScaledWidth() / 2, my = mc.getWindow().getGuiScaledHeight() / 2;
+        // weit entfernte zuerst, damit nahe obenauf liegen
+        var liste = new ArrayList<>(hier());
+        liste.removeIf(w -> !sichtbar(w));
+        liste.sort(Comparator.comparingDouble(Wegpunkte::abstand).reversed());
+        for (var w : liste) {
+            var s = Draw.project(new Vec3(w.pos().getX() + 0.5, w.pos().getY() + 1.2, w.pos().getZ() + 0.5));
+            if (s == null) continue;                                   // hinter der Kamera
+            int x = Math.round(s.x), y = Math.round(s.y);
+            boolean angeschaut = Math.abs(x - mx) <= HINSCHAUEN_PX && Math.abs(y - my) <= HINSCHAUEN_PX;
+            symbolKasten(g, w, x, y);
+            String name = w.name();
+            int nw = font.width(name);
+            Ansicht.rechteck(g, x - nw / 2 - 2, y + 7, nw + 4, 10, 0x80000000);
+            Draw.text(g, name, x - nw / 2, y + 8);
+            if (entfernung == 1 || (entfernung == 0 && angeschaut)) {
+                String d = entfernungText(abstand(w));
+                int dw = font.width(d);
+                Ansicht.rechteck(g, x - dw / 2 - 2, y + 18, dw + 4, 11, 0xA0000000);
+                Draw.text(g, d, x - dw / 2, y + 20);
+            }
+        }
+    }
+
+    /** Farbiges Quadrat mit Symbol, mittig auf (x, y) – auch für die Weltkarte. */
+    static void symbolKasten(GuiGraphicsExtractor g, Waypoints.Waypoint w, int x, int y) {
+        var font = Minecraft.getInstance().font;
+        String sym = symbol(w);
+        int b = Math.max(11, font.width(sym) + 4);
+        Ansicht.rechteck(g, x - b / 2 - 1, y - 6, b + 2, 13, 0xFF000000);
+        Ansicht.rechteck(g, x - b / 2, y - 5, b, 11, w.argb() | 0xFF000000);
+        int hell = ((w.argb() >> 16) & 0xFF) * 3 + ((w.argb() >> 8) & 0xFF) * 6 + (w.argb() & 0xFF);
+        int schrift = hell > 1600 ? 0xFF000000 : 0xFFFFFFFF;            // auf hellen Farben dunkle Schrift
+        g.text(font, sym, x - font.width(sym) / 2 + 1, y - 3, schrift, false);
+    }
+
+    // ───── Anlegen ─────
+    static void hierSetzen() {
+        var p = Minecraft.getInstance().player;
+        if (p == null) return;
+        String name = freierName(T.t("wp.standard"));
+        Waypoints.add(name, p.blockPosition(), FARBEN[Waypoints.all().size() % FARBEN.length]);
+        Notify.show(T.t("wp.titel"), T.t("wp.gesetzt", name));
+    }
+
+    // ───── Manager ─────
+    void oeffnen() {
+        Page.open(T.t("wp.liste"), () -> {
+            var l = new ArrayList<Setting>();
+            l.add(Setting.button(T.t("wp.neu"), T.t("wp.neu.info"), T.t("wp.hinzu"), Wegpunkte::hierSetzen));
+            l.add(Setting.toggle(T.t("wp.inwelt"), T.t("wp.inwelt.info"), () -> inWelt, v -> cfg.set("wp_welt", inWelt = v)));
+            l.add(Setting.choice(T.t("wp.entf"), null, ENTFERNUNG, () -> ENTFERNUNG.get(entfernung),
+                v -> cfg.set("wp_entfernung", entfernung = ENTFERNUNG.indexOf(v)), v -> T.t("wp.entf." + v)));
+            var liste = new ArrayList<>(hier());
+            liste.sort(Comparator.comparingDouble(Wegpunkte::abstand));
+            l.add(Setting.heading(T.t(liste.isEmpty() ? "wp.keine" : "wp.diese")));
+            for (var w : liste) {
+                String info = w.pos().getX() + ", " + w.pos().getY() + ", " + w.pos().getZ() + " · " + entfernungText(abstand(w))
+                    + (sichtbar(w) ? "" : T.t("wp.ausgeblendet")) + (eigen(w) ? "" : T.t("wp.von", w.addon()));
+                l.add(eigen(w)
+                    ? Setting.button("[" + symbol(w) + "] " + w.name(), info, T.t("wp.bearbeiten"), () -> bearbeiten(w.name()))
+                    : Setting.info(() -> "[" + symbol(w) + "] " + w.name() + " – " + info));
+            }
+            return l;
+        });
+    }
+
+    private Waypoints.Waypoint finde(String name) {
+        for (var w : Waypoints.all()) if (eigen(w) && w.name().equals(name)) return w;
+        return null;
+    }
+
+    // Name und Farbe ändert man über Löschen + neu Anlegen (die API hat kein Umbenennen); Symbol/Sichtbarkeit wandern mit
+    private void bearbeiten(String start) {
+        String[] name = {start};
+        Page.open(start, () -> {
+            var w = finde(name[0]);
+            if (w == null) return List.of(Setting.info(() -> T.t("wp.geloescht")));
+            return List.of(
+                Setting.text(T.t("wp.name"), null, 32, () -> name[0], v -> {
+                    var alt = finde(name[0]);
+                    if (alt == null || v.isBlank() || v.equals(name[0])) return;
+                    String neu = freierName(v.trim());
+                    String sym = AddonConfig.of(ADDON).text("wp_sym." + schluessel(alt), "");
+                    boolean an = sichtbar(alt);
+                    Waypoints.remove(alt.name());
+                    var n = Waypoints.add(neu, alt.pos(), alt.argb());
+                    cfg.set("wp_sym." + schluessel(n), sym);
+                    cfg.set("wp_an." + schluessel(n), an);
+                    name[0] = neu;
+                }),
+                Setting.text(T.t("wp.symbol"), T.t("wp.symbol.info"), 2, () -> cfg.text("wp_sym." + schluessel(w), ""),
+                    v -> cfg.set("wp_sym." + schluessel(w), v.trim())),
+                Setting.color(T.t("wp.farbe"), null, () -> w.argb() & 0xFFFFFF, v -> {
+                    var alt = finde(name[0]);
+                    if (alt == null) return;
+                    Waypoints.remove(alt.name());
+                    Waypoints.add(alt.name(), alt.pos(), 0xFF000000 | v);
+                }),
+                Setting.toggle(T.t("wp.inwelt"), null, () -> sichtbar(w), v -> cfg.set("wp_an." + schluessel(w), v)),
+                Setting.info(() -> T.t("wp.position", w.pos().getX() + ", " + w.pos().getY() + ", " + w.pos().getZ(), entfernungText(abstand(w)))),
+                Setting.button(T.t("wp.verschieben"), T.t("wp.verschieben.info"), T.t("wp.verschieben.knopf"), () -> {
+                    var p = Minecraft.getInstance().player;
+                    var alt = finde(name[0]);
+                    if (p == null || alt == null) return;
+                    Waypoints.remove(alt.name());
+                    Waypoints.add(alt.name(), p.blockPosition(), alt.argb());
+                }),
+                Setting.button(T.t("wp.loeschen"), null, T.t("wp.loeschen"), () -> {
+                    var alt = finde(name[0]);
+                    if (alt != null) Waypoints.remove(alt.name());
+                }));
+        });
+    }
+
+    /** Für den Selbsttest: anlegen, umbenennen per remove/add, löschen. */
+    static boolean selbsttest() {
+        String n = freierName("Test-WP");
+        Waypoints.add(n, new BlockPos(1, 64, 2), FARBEN[0]);
+        boolean da = Waypoints.all().stream().anyMatch(w -> eigen(w) && w.name().equals(n));
+        String sym = Waypoints.all().stream().filter(w -> w.name().equals(n)).findFirst().map(Wegpunkte::symbol).orElse("");
+        boolean weg = Waypoints.remove(n) && Waypoints.all().stream().noneMatch(w -> w.name().equals(n));
+        return da && sym.equals("T") && weg && entfernungText(458.9).equals(T.locale().getLanguage().equals("de") ? "458,9m" : "458.9m");
+    }
+}

@@ -1,0 +1,30 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Client starten · MC 26.3",
+      "type": "shell",
+      "command": "./gradlew runClient -Pminecraft=26.3",
+      "windows": { "command": "./gradlew.bat runClient -Pminecraft=26.3" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Client starten (Debug) · MC 26.3",
+      "type": "shell",
+      "command": "./gradlew runClient --debug-jvm -Pminecraft=26.3",
+      "windows": { "command": "./gradlew.bat runClient --debug-jvm -Pminecraft=26.3" },
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": { "regexp": "^__never__$" },
+        "background": { "activesBegin": ".", "beginsPattern": ".", "endsPattern": "Listening for transport dt_socket" }
+      }
+    },
+    {
+      "label": "Addon testen · MC 26.3",
+      "type": "shell",
+      "command": "./gradlew runTest -Pminecraft=26.3",
+      "windows": { "command": "./gradlew.bat runTest -Pminecraft=26.3" },
+      "problemMatcher": []
+    }
+  ]
+}
