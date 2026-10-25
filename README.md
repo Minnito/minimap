@@ -4,7 +4,7 @@
 |---|---|
 | **Addon** | MiniMap (ID `minimap`, formerly `karte`) |
 | **Version** | 1.3.0 |
-| **Developer** | Minnito |
+| **Developer** | Minnito / Claude |
 | **Platform** | Client addon for the MC Launcher, API 6.2.1, Minecraft 26.3 |
 | **Language / build** | Java 25 (`--release 25`), Gradle 9.4.1 (wrapper) |
 | **Status** | 2026-10-25 |
