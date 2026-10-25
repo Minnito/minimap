@@ -1,16 +1,21 @@
 package karte;
 
 import client.api.Draw;
+import client.api.Tasks;
 import com.mojang.blaze3d.platform.NativeImage;
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.zip.GZIPInputStream;
@@ -57,7 +62,7 @@ final class Hoehlen {
     private final Map<Long, String> zuletzt = new HashMap<>();   // Kachel → zuletzt gerechnetes Bild (Platzhalter beim schnellen Ziehen)
     private final BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
     private Path dir;
-    private int budget, serial;
+    private int budget, serial, generation;
     private long letzterKey = Long.MIN_VALUE;
     private Chunk letzter;
 
@@ -84,6 +89,7 @@ final class Hoehlen {
         kachelVersion.clear();
         letzter = null;
         letzterKey = Long.MIN_VALUE;
+        generation++;                                     // noch laufende Ladevorgänge verwerfen
         dir = null;
     }
 
@@ -207,58 +213,75 @@ final class Hoehlen {
         long r = Kartendaten.key(rx, rz);
         if (dir == null || !regionenGeladen.add(r)) return;
         Path f = datei(r);
-        if (!Files.exists(f)) return;
-        try (var in = new DataInputStream(new GZIPInputStream(Files.newInputStream(f)))) {
-            int anzahl = in.readInt();
-            for (int i = 0; i < anzahl; i++) {
-                int cx = in.readInt(), cz = in.readInt(), n = in.readInt();
-                short[] start = new short[257], ys = new short[n], de = new short[n];
-                int[] fa = new int[n];
-                for (int j = 0; j < 257; j++) start[j] = in.readShort();
-                for (int j = 0; j < n; j++) {
-                    ys[j] = in.readShort();
-                    de[j] = in.readShort();
-                    fa[j] = in.readInt();
+        int gen = generation;
+        Kartendaten.hintergrund(() -> {                   // Entpacken dauert Millisekunden – nicht auf dem Spiel-Thread
+            if (!Files.exists(f)) return;
+            var gelesen = new ArrayList<Map.Entry<Long, Chunk>>();
+            try (var in = new DataInputStream(new BufferedInputStream(new GZIPInputStream(Files.newInputStream(f))))) {
+                int anzahl = in.readInt();
+                for (int i = 0; i < anzahl; i++) {
+                    int cx = in.readInt(), cz = in.readInt(), n = in.readInt();
+                    short[] start = new short[257], ys = new short[n], de = new short[n];
+                    int[] fa = new int[n];
+                    for (int j = 0; j < 257; j++) start[j] = in.readShort();
+                    for (int j = 0; j < n; j++) {
+                        ys[j] = in.readShort();
+                        de[j] = in.readShort();
+                        fa[j] = in.readInt();
+                    }
+                    gelesen.add(Map.entry(Kartendaten.key(cx, cz), new Chunk(start, ys, de, fa)));
                 }
-                long k = Kartendaten.key(cx, cz);
-                chunks.putIfAbsent(k, new Chunk(start, ys, de, fa));   // frisch abgetastete Daten gewinnen
-                kachelVersion.merge(Kartendaten.key(cx >> 4, cz >> 4), 1, Integer::sum);
+            } catch (IOException e) {
+                System.err.println("[minimap] Höhlendaten unlesbar, werden neu erfasst: " + f + " – " + e);
             }
-        } catch (IOException e) {
-            System.err.println("[minimap] Höhlendaten unlesbar, werden neu erfasst: " + f + " – " + e);
-        }
+            Tasks.main(() -> {
+                if (gen != generation) return;
+                for (var e : gelesen) {
+                    // frisch abgetastete Daten gewinnen; dann wurde die Region ohne die alten gespeichert → erneut speichern
+                    if (chunks.putIfAbsent(e.getKey(), e.getValue()) != null) regionenGeaendert.add(r);
+                    kachelVersion.merge(Kartendaten.key((int) (e.getKey() >> 32) >> 4, (int) (long) e.getKey() >> 4), 1, Integer::sum);
+                }
+                letzterKey = Long.MIN_VALUE;              // farbe() hat sich evtl. „kein Chunk“ gemerkt
+            });
+        });
     }
 
+    /** Geänderte Regionen im Hintergrund schreiben (Chunk-Daten sind unveränderlich – die Liste genügt als Schnappschuss). */
     int save() {
-        if (dir == null) return 0;
-        int ok = 0;
-        for (long r : regionenGeaendert) {
-            int rx = (int) (r >> 32), rz = (int) r;
-            var inRegion = chunks.entrySet().stream()
-                .filter(e -> (int) (e.getKey() >> 32) >> 5 == rx && ((int) (long) e.getKey()) >> 5 == rz).toList();
-            try {
-                Files.createDirectories(dir);
-                try (var out = new DataOutputStream(new GZIPOutputStream(Files.newOutputStream(datei(r))))) {
-                    out.writeInt(inRegion.size());
-                    for (var e : inRegion) {
-                        Chunk c = e.getValue();
-                        out.writeInt((int) (e.getKey() >> 32));
-                        out.writeInt((int) (long) e.getKey());
-                        out.writeInt(c.y.length);
-                        for (short s : c.start) out.writeShort(s);
-                        for (int j = 0; j < c.y.length; j++) {
-                            out.writeShort(c.y[j]);
-                            out.writeShort(c.decke[j]);
-                            out.writeInt(c.farbe[j]);
+        if (dir == null || regionenGeaendert.isEmpty()) return 0;
+        var proRegion = new HashMap<Long, List<Map.Entry<Long, Chunk>>>();   // einmal gruppieren statt je Region alle Chunks
+        for (var e : chunks.entrySet()) {
+            long r = Kartendaten.key((int) (e.getKey() >> 32) >> 5, (int) (long) e.getKey() >> 5);
+            if (regionenGeaendert.contains(r)) proRegion.computeIfAbsent(r, k -> new ArrayList<>()).add(Map.entry(e.getKey(), e.getValue()));
+        }
+        for (var r : proRegion.entrySet()) {
+            Path f = datei(r.getKey());
+            var inRegion = r.getValue();
+            Kartendaten.hintergrund(() -> {
+                try {
+                    Path tmp = Kartendaten.tmp(f);
+                    try (var out = new DataOutputStream(new BufferedOutputStream(new GZIPOutputStream(Files.newOutputStream(tmp))))) {
+                        out.writeInt(inRegion.size());
+                        for (var e : inRegion) {
+                            Chunk c = e.getValue();
+                            out.writeInt((int) (e.getKey() >> 32));
+                            out.writeInt((int) (long) e.getKey());
+                            out.writeInt(c.y.length);
+                            for (short s : c.start) out.writeShort(s);
+                            for (int j = 0; j < c.y.length; j++) {
+                                out.writeShort(c.y[j]);
+                                out.writeShort(c.decke[j]);
+                                out.writeInt(c.farbe[j]);
+                            }
                         }
                     }
+                    Kartendaten.ersetzen(tmp, f);
+                } catch (IOException e) {
+                    System.err.println("[minimap] Höhlendaten nicht gespeichert: " + f + " – " + e);
                 }
-                ok++;
-            } catch (IOException e) {
-                System.err.println("[minimap] Höhlendaten nicht gespeichert: " + datei(r) + " – " + e);
-            }
+            });
         }
         regionenGeaendert.clear();
-        return ok;
+        return proRegion.size();
     }
 }

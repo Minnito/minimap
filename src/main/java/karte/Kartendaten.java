@@ -2,11 +2,13 @@ package karte;
 
 import client.api.AddonConfig;
 import client.api.Draw;
+import client.api.Tasks;
 import com.mojang.blaze3d.platform.NativeImage;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -14,6 +16,9 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
@@ -133,6 +138,8 @@ final class Kartendaten {
 
     private final Map<Ebene, Map<Long, Tile>> ebenen = new HashMap<>();
     private final Set<String> missing = new HashSet<>(); // "<ebene>/<key>" ohne Datei – nicht jedes Bild erneut nachsehen
+    private final Set<String> laden = new HashSet<>();   // "<ebene>/<key>" wird gerade im Hintergrund gelesen
+    private int generation;                              // steigt bei close() – Ladeergebnisse der alten Welt verwerfen
     private final Set<Tile> unsaved = new HashSet<>();
     private final Map<Long, Integer> gescannt = new HashMap<>();  // Chunk → Tick der letzten Abtastung
     private final BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
@@ -186,8 +193,7 @@ final class Kartendaten {
             long k = key(cx, cz);
             Integer t = gescannt.get(k);
             if ((t != null && ticks - t < FRISCH_TICKS) || !level.hasChunk(cx, cz)) continue;
-            scan(level, cx, cz);
-            gescannt.put(k, ticks);
+            if (scan(level, cx, cz)) gescannt.put(k, ticks);
         }
         if (gescannt.size() > 100_000) gescannt.clear();
         if (ticks % SAVE_TICKS == 0) save();
@@ -206,27 +212,68 @@ final class Kartendaten {
         uebersichten.clear();
         uebersichtVersion.clear();
         missing.clear();
+        laden.clear();
+        generation++;              // noch laufende Ladevorgänge verwerfen
         gescannt.clear();
         last = null;
         lastEbene = null;
         dir = null;
     }
 
-    /** Geänderte Kacheln schreiben; liefert, wie viele jetzt als Datei vorliegen. */
+    /** Geänderte Kacheln im Hintergrund schreiben; liefert, wie viele eingereiht wurden (fertig erst nach gespeichert()). */
     int save() {
         hoehlen.save();
-        int ok = 0;
         for (var t : unsaved) {
-            try {
-                Files.createDirectories(t.file.getParent());
-                t.image.writeToFile(t.file);
-                ok++;
-            } catch (IOException e) {
-                System.err.println("[minimap] Speichern fehlgeschlagen: " + t.file + " – " + e);
-            }
+            var kopie = new NativeImage(TILE, TILE, true);   // Schnappschuss: die Kachel malt weiter, während geschrieben wird
+            kopie.copyFrom(t.image);
+            Path file = t.file;
+            DATEIEN.execute(() -> {
+                try (kopie) {
+                    Path tmp = tmp(file);
+                    kopie.writeToFile(tmp);
+                    ersetzen(tmp, file);
+                } catch (IOException e) {
+                    System.err.println("[minimap] Speichern fehlgeschlagen: " + file + " – " + e);
+                }
+            });
         }
+        int n = unsaved.size();
         unsaved.clear();
-        return ok;
+        return n;
+    }
+
+    // PNG-/GZIP-Kodieren dauert je Kachel Millisekunden – auf dem Spiel-Thread waren das alle 10 s Standbilder.
+    // Ein Thread für Lesen und Schreiben: eine Datei wird nie gelesen, bevor ihr eingereihtes Speichern fertig ist.
+    // Nicht-Daemon mit Leerlauf-Ende: offene Schreibvorgänge
+    // laufen beim Beenden noch zu Ende, ein untätiger Thread hält die JVM aber nicht am Leben.
+    private static final ThreadPoolExecutor DATEIEN = new ThreadPoolExecutor(1, 1, 1, TimeUnit.SECONDS,
+        new LinkedBlockingQueue<>(), r -> new Thread(r, "minimap-dateien"));
+
+    static {
+        DATEIEN.allowCoreThreadTimeOut(true);
+    }
+
+    /** Wartet, bis alle eingereihten Dateien geschrieben sind (Addon entladen, Selbsttest). */
+    static void gespeichert() {
+        try {
+            DATEIEN.submit(() -> {}).get(30, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            System.err.println("[minimap] Warten aufs Speichern abgebrochen: " + e);
+        }
+    }
+
+    static void hintergrund(Runnable r) {
+        DATEIEN.execute(r);
+    }
+
+    // Erst daneben schreiben, dann ersetzen: wer die Datei liest, sieht nie eine halbe
+    static Path tmp(Path file) throws IOException {
+        Files.createDirectories(file.getParent());
+        return file.resolveSibling(file.getFileName() + ".tmp");
+    }
+
+    static void ersetzen(Path tmp, Path file) throws IOException {
+        Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
     }
 
     /** Wie viele geladene Kacheln als Datei auf der Platte liegen. */
@@ -263,10 +310,12 @@ final class Kartendaten {
         return last.image.getPixel(Math.floorMod(x, TILE), Math.floorMod(z, TILE));
     }
 
-    private void scan(ClientLevel level, int cx, int cz) {
+    /** false = Kachel wird noch geladen, Chunk später erneut abtasten. */
+    private boolean scan(ClientLevel level, int cx, int cz) {
         int tx = Math.floorDiv(cx * 16, TILE), tz = Math.floorDiv(cz * 16, TILE);  // ein Chunk liegt immer in einer Kachel
         Tile tag = tile(Ebene.of(Typ.TAG), tx, tz, true), nacht = tile(Ebene.of(Typ.NACHT), tx, tz, true);
         Tile topo = tile(Ebene.of(Typ.TOPO), tx, tz, true);
+        if (tag == null || nacht == null || topo == null) return false;
         if (hoehlen.scan(level, cx, cz)) version++;
         int minY = level.getMinY();
         var blockLight = level.getLightEngine().getLayerListener(LightLayer.BLOCK);
@@ -288,6 +337,7 @@ final class Kartendaten {
                 }
             }
         }
+        return true;
     }
 
     private void put(Tile t, int px, int pz, int argb) {
@@ -365,28 +415,47 @@ final class Kartendaten {
         var m = ebenen.computeIfAbsent(e, k -> new HashMap<>());
         Tile t = m.get(key);
         String miss = e.ordner() + "/" + key;
-        if (t != null || dir == null || (!create && missing.contains(miss))) return t;
+        if (t != null || dir == null || laden.contains(miss)) return t;
         Path file = dir.resolve(e.ordner()).resolve(tx + "_" + tz + ".png");
-        NativeImage image = null;
-        if (Files.exists(file)) {
-            try (InputStream in = Files.newInputStream(file)) {
-                image = NativeImage.read(in);
-            } catch (IOException ex) {
-                System.err.println("[minimap] Kachel unlesbar, wird neu gemalt: " + file + " – " + ex);
-            }
+        if (missing.contains(miss)) {                            // keine Datei: leer anfangen (oder nichts zeigen)
+            if (!create) return null;
+            missing.remove(miss);
+            return neu(m, e, tx, tz, file, new NativeImage(TILE, TILE, true));
         }
-        if (image == null) {
-            if (!create) {
-                missing.add(miss);
-                return null;
+        // PNG lesen dauert ~1–2 ms je Kachel (die Weltkarte braucht Dutzende) – im Hintergrund, erscheint ein paar Bilder später
+        laden.add(miss);
+        int gen = generation;
+        DATEIEN.execute(() -> {
+            NativeImage image = null;
+            if (Files.exists(file)) {
+                try (InputStream in = Files.newInputStream(file)) {
+                    image = NativeImage.read(in);
+                } catch (IOException ex) {
+                    System.err.println("[minimap] Kachel unlesbar, wird neu gemalt: " + file + " – " + ex);
+                }
             }
-            image = new NativeImage(TILE, TILE, true);
-        }
-        missing.remove(miss);
+            NativeImage bild = image;
+            Tasks.main(() -> {
+                if (gen != generation) {
+                    if (bild != null) bild.close();
+                    return;
+                }
+                laden.remove(miss);
+                if (bild == null) missing.add(miss);
+                else {
+                    neu(m, e, tx, tz, file, bild);
+                    version++;
+                }
+            });
+        });
+        return null;
+    }
+
+    private Tile neu(Map<Long, Tile> m, Ebene e, int tx, int tz, Path file, NativeImage image) {
         String ueb = uebersichtKey(e, Math.floorDiv(tx, UEBERSICHT), Math.floorDiv(tz, UEBERSICHT));
         uebersichtVersion.merge(ueb, 1, Integer::sum);           // neu geladene Kachel gehört in die Übersicht
-        t = new Tile(image, Draw.texture(Karte.ID, "tile" + serial++, image), file, ueb);
-        m.put(key, t);
+        Tile t = new Tile(image, Draw.texture(Karte.ID, "tile" + serial++, image), file, ueb);
+        m.put(key(tx, tz), t);
         return t;
     }
 

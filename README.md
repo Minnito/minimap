@@ -3,14 +3,30 @@
 | | |
 |---|---|
 | **Addon** | MiniMap (ID `minimap`, formerly `karte`) |
-| **Version** | 1.3.0 |
+| **Version** | 1.4.0 |
 | **Developer** | Minnito / Claude |
 | **Platform** | Client addon for the MC Launcher, API 6.2.1, Minecraft 26.3 |
 | **Language / build** | Java 25 (`--release 25`), Gradle 9.4.1 (wrapper) |
 | **Status** | 2026-10-25 |
-| **Build** | `build/libs/minimap.jar`, 120,851 bytes, SHA-256 `13079ecae0ba0a8acf1c894ae20c82aabede057be9efc77cf3db900a7b535dca` |
-| **Self-test** | `gradlew runTest`: 21 of 21 checks passed (2026-10-25, 13:11) |
-| **Download** | [Release v1.3.0](https://github.com/Minnito/minimap/releases/tag/v1.3.0) |
+| **Build** | `build/libs/minimap.jar`, 123,621 bytes, SHA-256 `1a19b7e8e02cdca9b99c1b8b6367f37396b50f8adb69e49df69b5ba05b0ed146` |
+| **Self-test** | `gradlew runTest`: 21 of 21 checks passed (2026-10-25, 19:23) |
+| **Download** | [Release v1.4.0](https://github.com/Minnito/minimap/releases/tag/v1.4.0) (previous: [v1.3.0](https://github.com/Minnito/minimap/releases/tag/v1.3.0)) |
+
+---
+
+## What's new in 1.4.0
+
+### Bug fixes
+- **Short freezes every 10 seconds are gone.** Saving map tiles (PNG) and cave data (gzip) used to run on the render thread. With a normal render distance that meant several hundred milliseconds of freeze every 10 s. Now only a pixel snapshot is taken on the render thread (memcpy); encoding and writing run in the background. Measured in the self-test: **50 ms → 1.4 ms** on the render thread, with twice the number of tiles.
+- **Hitches when crossing tile borders and on the world map are gone.** Map tiles (~1–2 ms each) and cave regions (2–6 ms each) were read synchronously when entering a new 256-block tile, and for every unloaded tile visible on the world map (an overview needs 16). They now load in the background and appear a few frames later. Measured tick spikes: **25 ms → 9.5 ms** (the rest is the scan budget plus JIT warm-up right after joining).
+- **Cave data compression was very slow.** `DataOutputStream` wrote directly into `GZIPOutputStream`, so every single `writeShort` went to the deflater (same when reading). A buffer now sits in between.
+- **Saving cave regions searched all chunks once per region.** Chunks are now grouped by region in one pass.
+- **Half-written map files.** Tiles and cave data are written to a `.tmp` file first and then replaced atomically, so a crash or a quick rejoin never reads a half-written file. One shared file thread for reading and writing guarantees that a file is never read before its queued save has finished.
+- **Waypoints in the world grew relative to the landscape and covered a lot of the view.** They were drawn at GUI scale, so with a high GUI scale they were huge, and since their size never changed they covered ever more landscape with distance.
+
+### Changes
+- **Waypoints at a fixed size like Xaero:** small, in real screen pixels, independent of distance and GUI scale (`Wegpunkte.GROESSE`, default 1.5 screen pixels per font pixel).
+- When the addon is unloaded, it waits until all queued files are written.
 
 ---
 
@@ -49,7 +65,7 @@ A minimap and world map in the style of JourneyMap and Xaero's Minimap that runs
 - Servers can disable it via the `seedmap` feature
 
 ### Waypoints (`B` = set here, `N` = manager)
-- Shown in the world as a colored square with symbol and name; distance shown when you look at it (setting: when looking, always, never)
+- Shown in the world as a small colored square with symbol and name, at a fixed size in real screen pixels like Xaero (independent of distance and GUI scale); distance shown when you look at it (setting: when looking, always, never)
 - Manager with list, new, edit, delete; custom symbol (1 to 2 characters) and visibility per waypoint
 - Stored via the client API (`Waypoints`). Waypoints from other addons are shown but cannot be edited
 
@@ -60,19 +76,19 @@ A minimap and world map in the style of JourneyMap and Xaero's Minimap that runs
 
 ## 3. Architecture
 
-12 classes in package `karte`, 2,922 lines in total.
+12 classes in package `karte`, 3,023 lines in total.
 
 | Class | Lines | Purpose |
 |---|---:|---|
-| `Karte` | 187 | Entry point (`client.api.Module`): keys, HUD, settings, lifecycle (`join`, `leave`, `unload`), self-test |
-| `Kartendaten` | 460 | Scans loaded chunks and paints one pixel per block into tiles of 256 × 256 blocks, separated by layer. Order: rings around the player, nearest first. Time budget 4 ms per tick |
-| `Hoehlen` | 264 | Cave data for any Y level: per block column, the floors (solid block with air above) with color and ceiling. Any height can be derived from this instantly |
+| `Karte` | 189 | Entry point (`client.api.Module`): keys, HUD, settings, lifecycle (`join`, `leave`, `unload`), self-test |
+| `Kartendaten` | 529 | Scans loaded chunks and paints one pixel per block into tiles of 256 × 256 blocks, separated by layer. Order: rings around the player, nearest first. Time budget 4 ms per tick. All file reading and writing runs on one background thread (`minimap-dateien`) |
+| `Hoehlen` | 287 | Cave data for any Y level: per block column, the floors (solid block with air above) with color and ceiling. Any height can be derived from this instantly |
 | `Minimap` | 298 | Composes the minimap image on the CPU from the tiles; only recomputes when something changed |
 | `Vollbild` | 500 | World map: controls, buttons, right-click menu, cross-fade, seed map as underlay |
 | `SeedKarte` | 477 | Biomes and terrain height from the seed via `MultiNoiseBiomeSource` / `NoiseBasedChunkGenerator`; thread pool, PNG cache, comparison against the real world |
 | `Ansicht` | 248 | World ↔ screen conversion (center, scale, rotation); shared drawing of waypoints, radar and player arrow |
 | `Gesicht` | 115 | Creature face from its own texture: model part `head`, largest cube, front face. Works for all creatures without custom images |
-| `Wegpunkte` | 215 | In-world waypoints and the manager |
+| `Wegpunkte` | 222 | In-world waypoints and the manager |
 | `Biomfarben` | 38 | Biome colors as in Chunkbase/Amidst; unknown biomes get a fixed color derived from their name |
 | `Umzug` | 101 | One-time migration from the old ID `karte` to `minimap` (settings, folders, key bindings, waypoint owner) |
 | `T` | 19 | Translations from `assets/minimap/lang/` |
@@ -93,7 +109,7 @@ World name: server = address (`localhost_25598`), singleplayer = `sp_` + the wor
 
 ## 4. History
 
-All work happened on 2026-10-25, from onboarding to the finished 1.3.0 build.
+All work happened on 2026-10-25, from onboarding to the finished 1.3.0 build and the 1.4.0 performance and waypoint update.
 
 1. **Onboarding (approx. 00:11).** Collected background knowledge on client API 6.2.1 (`kb/Grundwissen-Client-Module.md`, original docs in `kb/eclipse-docs.txt`) and captured the project as a knowledge graph (`graphify-out/`).
 2. **Scaffold (approx. 00:27).** Set up the Gradle template: `build`, `runClient`, `install`, `runTest`, `publishAddon`. The build downloads Minecraft and its libraries directly from Mojang. Without an addon server it takes the API and client from the installed launcher.
@@ -102,6 +118,7 @@ All work happened on 2026-10-25, from onboarding to the finished 1.3.0 build.
 5. **Follow-ups (`Verbesserungen.md`, 02:08).** Noted: rework the world map icons, allow inserting the Chunkbase map. The Chunkbase map is built in (seed map from the Chunkbase link); the world map buttons have labels and tooltips.
 6. **Rename to `minimap` (version 1.3.0, until 13:10).** New ID, name "MiniMap", translations moved out (de_de, en_us), settings split into sub-pages, waypoint manager. `Umzug` takes over the data of the old ID on first launch.
 7. **Build and test (13:10 to 13:11).** Built `minimap.jar`, `runTest` passed 21 of 21 checks.
+8. **Version 1.4.0 (evening).** Measured freezes in the self-test with temporary timing points, then moved all file reading and writing off the render thread (see "What's new in 1.4.0"). Waypoints in the world switched to a fixed size in real screen pixels after a side-by-side comparison with Xaero's Minimap.
 
 ## 5. Fixed bugs and implemented ideas
 
@@ -154,7 +171,7 @@ These shortcuts are deliberate and marked with `ponytail:` in the code:
 - **Minimap rebuild.** With a large minimap and high GUI scale, up to 512² pixels per rebuild, but only when moving by at least 1 pixel (`Minimap`).
 - **Face cache.** If a creature changes its variant, this only shows after a world change (`Gesicht`).
 
-Still open from the ideas report: write tiles and cave data atomically, shut down seed threads on `.addon reload`, structures from the seed, seed terrain on the minimap, export the map as an image.
+Still open from the ideas report: shut down seed threads on `.addon reload`, structures from the seed, seed terrain on the minimap, export the map as an image.
 
 ## 8. Building and running
 

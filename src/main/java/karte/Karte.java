@@ -68,6 +68,7 @@ public final class Karte implements Module {
     @Override
     public void unload() {
         daten.close();
+        Kartendaten.gespeichert();   // Addon wird entladen: eingereihte Dateien noch schreiben
     }
 
     @Override
@@ -127,6 +128,7 @@ public final class Karte implements Module {
                 "Höhenansicht für jede Y-Höhe");
             Testing.await("Karte gemalt", () -> daten.geladen() >= 3, 200, () -> Tasks.later(40, () -> {   // 2 s Köpfe zeichnen
                 daten.save();
+                Kartendaten.gespeichert();
                 Testing.check(daten.dateien() >= 3, "Tag, Nacht und Topo gespeichert");
                 Testing.check(daten.hoehlen.chunks() >= 1, "Höhlendaten nebenbei erfasst (" + daten.hoehlen.chunks() + " Chunks)");
                 var p0 = Minecraft.getInstance().player.blockPosition();

@@ -23,6 +23,7 @@ import net.minecraft.world.phys.Vec3;
 final class Wegpunkte {
     static final String ADDON = Karte.ID;
     private static final int HINSCHAUEN_PX = 14;          // so nah am Fadenkreuz gilt ein Wegpunkt als angeschaut
+    private static final float GROESSE = 1.5f;              // Bildschirmpixel je Schriftpixel (Xaero-Größe ≈ 1–2)
     private static final List<String> ENTFERNUNG = List.of("hin", "immer", "nie");   // Schlüssel wp.entf.<…>
     private static final int[] FARBEN = {0xFFFF5555, 0xFF55FF55, 0xFF5599FF, 0xFFFFD040, 0xFFFF79C6, 0xFF40E0E0, 0xFFFFFFFF};
 
@@ -89,6 +90,8 @@ final class Wegpunkte {
         if (mc.player == null || mc.level == null) return;
         var font = mc.font;
         int mx = mc.getWindow().getGuiScaledWidth() / 2, my = mc.getWindow().getGuiScaledHeight() / 2;
+        // Wie Xaero: feste Größe in echten Bildschirmpixeln – unabhängig von GUI-Skalierung und Entfernung
+        float k = GROESSE / (float) mc.getWindow().getGuiScale();
         // weit entfernte zuerst, damit nahe obenauf liegen
         var liste = new ArrayList<>(hier());
         liste.removeIf(w -> !sichtbar(w));
@@ -98,17 +101,21 @@ final class Wegpunkte {
             if (s == null) continue;                                   // hinter der Kamera
             int x = Math.round(s.x), y = Math.round(s.y);
             boolean angeschaut = Math.abs(x - mx) <= HINSCHAUEN_PX && Math.abs(y - my) <= HINSCHAUEN_PX;
-            symbolKasten(g, w, x, y);
+            g.pose().pushMatrix();
+            g.pose().translate(x, y);
+            g.pose().scale(k, k);
+            symbolKasten(g, w, 0, 0);
             String name = w.name();
             int nw = font.width(name);
-            Ansicht.rechteck(g, x - nw / 2 - 2, y + 7, nw + 4, 10, 0x80000000);
-            Draw.text(g, name, x - nw / 2, y + 8);
+            Ansicht.rechteck(g, -nw / 2 - 2, 7, nw + 4, 10, 0x80000000);
+            Draw.text(g, name, -nw / 2, 8);
             if (entfernung == 1 || (entfernung == 0 && angeschaut)) {
                 String d = entfernungText(abstand(w));
                 int dw = font.width(d);
-                Ansicht.rechteck(g, x - dw / 2 - 2, y + 18, dw + 4, 11, 0xA0000000);
-                Draw.text(g, d, x - dw / 2, y + 20);
+                Ansicht.rechteck(g, -dw / 2 - 2, 18, dw + 4, 11, 0xA0000000);
+                Draw.text(g, d, -dw / 2, 20);
             }
+            g.pose().popMatrix();
         }
     }
 
