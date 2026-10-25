@@ -8,8 +8,8 @@
 | **Platform** | Client addon for the MC Launcher, API 6.2.1, Minecraft 26.3 |
 | **Language / build** | Java 25 (`--release 25`), Gradle 9.4.1 (wrapper) |
 | **Status** | 2026-10-25 |
-| **Build** | `build/libs/minimap.jar`, 123,621 bytes, SHA-256 `1a19b7e8e02cdca9b99c1b8b6367f37396b50f8adb69e49df69b5ba05b0ed146` |
-| **Self-test** | `gradlew runTest`: 21 of 21 checks passed (2026-10-25, 19:23) |
+| **Build** | `build/libs/minimap.jar`, 123,610 bytes, SHA-256 `6f06b3beffdd9b50714badbd1f39a2306a309105528cd3e7eeea9f1913e850ba` |
+| **Self-test** | `gradlew runTest`: 21 of 21 checks passed (2026-10-25, 19:34) |
 | **Download** | [Release v1.4.0](https://github.com/Minnito/minimap/releases/tag/v1.4.0) (previous: [v1.3.0](https://github.com/Minnito/minimap/releases/tag/v1.3.0)) |
 
 ---
