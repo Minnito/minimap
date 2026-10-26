@@ -3,13 +3,13 @@
 //   gradlew runClient                 → Spiel mit Client + diesem Addon starten (offline als „Dev“, Spielordner run/)
 //                                       -Pserver=localhost:25565 → gleich auf einen Server; -Pplayer=Name
 //                                       --debug-jvm → wartet auf einen Debugger an Port 5005 (IntelliJ: einfach den Debug-Knopf)
-//   -Pminecraft=26.3                  → andere Minecraft-Version als in module.json (bauen, starten, testen);
+//   -Pminecraft=26.3                  → andere Minecraft-Version als die erste aus module.json (bauen, starten, testen);
 //                                       gradlew minecraftVersions zeigt, welche der Client unterstützt
 //   gradlew install                   → Jar ins Spiel kopieren (Standard run/, sonst -PgameDir=<Spielordner>). Läuft das Spiel,
 //                                       landet es als <id>.jar.update – im Chat „.addon reload <id>“ lädt es ohne Neustart
 //   gradlew runTest                   → lokaler Vanilla-Server + Spiel, Addon prüft sich mit client.api.Testing
 //   gradlew publishAddon -PaddonToken=… → Jar an den Addon-Server schicken (wartet dort auf Freigabe)
-// Andere Server-Adresse: -PclientServer=https://… (Standard http://localhost:8787, Maven-Repo darunter unter /maven).
+// Andere Server-Adresse: -PclientServer=https://… (Standard https://api.gta5eclipse.de, Maven-Repo darunter unter /maven; lokal: -PclientServer=http://localhost:8787).
 import groovy.json.JsonSlurper
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -20,8 +20,10 @@ import java.nio.file.StandardCopyOption
 plugins { id 'java' }
 
 def module = new JsonSlurper().parse(file('src/main/resources/module.json'))
-def mc = providers.gradleProperty('minecraft').getOrElse(module.minecraft)
-def addonServer = providers.gradleProperty('clientServer').getOrElse('http://localhost:8787')
+if (!(module.api instanceof String) || !(module.minecraft instanceof List) || !module.minecraft)
+    throw new GradleException('module.json: „api“ als eine Version (Text, z. B. "7.1.03"), „minecraft“ als Liste (z. B. ["26.3", "26.4"])')
+def mc = providers.gradleProperty('minecraft').getOrElse(module.minecraft[0]) // Standard: erste Version aus module.json
+def addonServer = providers.gradleProperty('clientServer').getOrElse('') ?: 'https://api.gta5eclipse.de' // leer (z. B. CI ohne Variable) = Standard
 
 repositories {
     // Modul-API (client:client-api), Patch-Prüfung und Client für runClient
@@ -62,14 +64,11 @@ def minecraft = [mcJar] + libs.findAll { !it.name.contains('natives') }.collect 
 
 configurations { patchCheck; clientAgent }
 
-// Kein Addon-Server erreichbar? Dann API + Client aus dem installierten Launcher nehmen (-PclientJar=… überschreibt den Pfad)
-def localClient = file(providers.gradleProperty('clientJar').getOrElse("${System.getenv('LOCALAPPDATA')}/Programs/mc-launcher/resources/client.jar"))
-
 dependencies {
-    compileOnly localClient.exists() ? files(localClient) : "client:client-api:${module.api}"
+    compileOnly "client:client-api:${module.api}"
     compileOnly files(minecraft)
     patchCheck "client:client-check:${module.api}"
-    clientAgent localClient.exists() ? files(localClient) : "client:client:${module.api}"
+    clientAgent "client:client:${module.api}"
 }
 
 tasks.withType(JavaCompile).configureEach {
@@ -118,7 +117,7 @@ tasks.register('install') {
 def assetsDir = { ->
     def id = version.assetIndex.id
     def home = System.getProperty('user.home'), appData = System.getenv('APPDATA') ?: home
-    def found = [providers.gradleProperty('assetsDir').orNull, "$appData/mc-launcher/meta/assets", "$appData/.minecraft/assets",
+    def found = [providers.gradleProperty('assetsDir').orNull, "$appData/swift-launcher/meta/assets", "$appData/mc-launcher/meta/assets", "$appData/.minecraft/assets",
                  "$home/Library/Application Support/minecraft/assets", "$home/.minecraft/assets"]
         .findAll { it }.collect { new File(it) }.find { new File(it, "indexes/${id}.json").exists() }
     if (found) return found
@@ -137,7 +136,7 @@ def supported = { ->
     def zip = new java.util.zip.ZipFile(configurations.clientAgent.singleFile)
     try {
         def entry = zip.getEntry('client/minecraft.json')
-        entry ? new JsonSlurper().parse(zip.getInputStream(entry)) as List : [module.minecraft]
+        entry ? new JsonSlurper().parse(zip.getInputStream(entry)) as List : module.minecraft
     } finally {
         zip.close()
     }

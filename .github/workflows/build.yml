@@ -1,5 +1,5 @@
-# Baut das Addon bei jedem Push und legt das Jar als Artefakt ab. Repository-Variable CLIENT_SERVER = Adresse des
-# Addon-Servers (für die Maven-Abhängigkeiten), z. B. https://addons.example.com
+# Baut das Addon bei jedem Push und legt das Jar als Artefakt ab. Optionale Repository-Variable CLIENT_SERVER = Adresse
+# eines eigenen Addon-Servers (für die Maven-Abhängigkeiten); ohne Variable gilt https://api.gta5eclipse.de
 # runTest (Spiel + Server) braucht eine Grafikkarte bzw. OpenGL und läuft darum lokal, nicht hier.
 name: build
 on: [push, pull_request]
