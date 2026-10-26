@@ -27,14 +27,41 @@ final class Wegpunkte {
     private static final List<String> ENTFERNUNG = List.of("hin", "immer", "nie");   // Schlüssel wp.entf.<…>
     private static final int[] FARBEN = {0xFFFF5555, 0xFF55FF55, 0xFF5599FF, 0xFFFFD040, 0xFFFF79C6, 0xFF40E0E0, 0xFFFFFFFF};
 
+    private static final int TOD_FARBE = 0xFFFF5555;
+    private static final double TOD_NAH = 4;                // so nah (Blöcke) gilt der Todespunkt als erreicht
+
     private final AddonConfig cfg;
-    private boolean inWelt;
+    private boolean inWelt, todAn, todLoeschen;
     private int entfernung;
 
     Wegpunkte(AddonConfig cfg) {
         this.cfg = cfg;
         inWelt = cfg.bool("wp_welt", true);
         entfernung = Math.clamp(cfg.number("wp_entfernung", 0), 0, 2);
+        todAn = cfg.bool("wp_tod", true);
+        todLoeschen = cfg.bool("wp_tod_loeschen", true);
+    }
+
+    // ───── Todespunkt: erkannt am Namen in der Spielsprache – im Manager umbenannt wird er ein normaler Wegpunkt ─────
+    // ponytail: nach einem Sprachwechsel bleibt ein alter Todespunkt als normaler Wegpunkt stehen
+
+    static Waypoints.Waypoint todespunkt() {
+        String n = T.t("wp.tod");
+        for (var w : Waypoints.all()) if (eigen(w) && w.name().equals(n)) return w;
+        return null;
+    }
+
+    void gestorben() {
+        var p = Minecraft.getInstance().player;
+        if (todAn && p != null) Waypoints.add(T.t("wp.tod"), p.blockPosition(), TOD_FARBE);   // ersetzt den letzten
+    }
+
+    void ankunft() {
+        var p = Minecraft.getInstance().player;
+        if (!todLoeschen || p == null || !p.isAlive()) return;     // auf dem Todesbildschirm steht man noch genau dort
+        var w = todespunkt();
+        if (w != null && w.dimension().equals(Waypoints.dimension()) && p.blockPosition().closerThan(w.pos(), TOD_NAH))
+            Waypoints.remove(w.name());
     }
 
     // ───── Symbol und Sichtbarkeit je Wegpunkt ─────
@@ -148,6 +175,9 @@ final class Wegpunkte {
             l.add(Setting.toggle(T.t("wp.inwelt"), T.t("wp.inwelt.info"), () -> inWelt, v -> cfg.set("wp_welt", inWelt = v)));
             l.add(Setting.choice(T.t("wp.entf"), null, ENTFERNUNG, () -> ENTFERNUNG.get(entfernung),
                 v -> cfg.set("wp_entfernung", entfernung = ENTFERNUNG.indexOf(v)), v -> T.t("wp.entf." + v)));
+            l.add(Setting.toggle(T.t("wp.tod.an"), T.t("wp.tod.an.info"), () -> todAn, v -> cfg.set("wp_tod", todAn = v)));
+            l.add(Setting.toggle(T.t("wp.tod.loeschen"), T.t("wp.tod.loeschen.info"), () -> todLoeschen,
+                v -> cfg.set("wp_tod_loeschen", todLoeschen = v)).visibleIf(() -> todAn));
             var liste = new ArrayList<>(hier());
             liste.sort(Comparator.comparingDouble(Wegpunkte::abstand));
             l.add(Setting.heading(T.t(liste.isEmpty() ? "wp.keine" : "wp.diese")));

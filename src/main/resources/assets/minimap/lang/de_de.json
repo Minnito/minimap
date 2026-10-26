@@ -156,5 +156,10 @@
   "minimap.wp.verschieben": "Hierher verschieben",
   "minimap.wp.verschieben.info": "Auf deine aktuelle Position setzen",
   "minimap.wp.verschieben.knopf": "Verschieben",
-  "minimap.wp.loeschen": "Löschen"
+  "minimap.wp.loeschen": "Löschen",
+  "minimap.wp.tod": "Tod",
+  "minimap.wp.tod.an": "Todespunkt",
+  "minimap.wp.tod.an.info": "Beim Tod automatisch einen Wegpunkt setzen (ersetzt den letzten)",
+  "minimap.wp.tod.loeschen": "Todespunkt beim Erreichen löschen",
+  "minimap.wp.tod.loeschen.info": "Verschwindet, sobald du bis auf 4 Blöcke an die Todesstelle kommst"
 }

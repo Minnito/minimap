@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.List;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
+import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.EntityTypes;
 
 // Karte im Stil von JourneyMap: Minimap (Minimap.java) und Weltkarte (Vollbild.java) aus gemeinsamen Kartendaten
@@ -37,6 +38,7 @@ public final class Karte implements Module {
     private final Kartendaten daten = new Kartendaten();
     private final Minimap minimap = new Minimap(cfg, daten);
     private final Vollbild vollbild = new Vollbild(cfg, daten);
+    private int takt;
 
     {
         vollbild.manager = wegpunkte::oeffnen;
@@ -56,7 +58,13 @@ public final class Karte implements Module {
         while (typKey.consumeClick()) minimap.naechsterModus();
         while (wpNeuKey.consumeClick()) Wegpunkte.hierSetzen();
         while (wpListeKey.consumeClick()) wegpunkte.oeffnen();
+        if (++takt % 10 == 0) wegpunkte.ankunft();
         daten.tick();
+    }
+
+    @Override
+    public void death(Component message) {
+        wegpunkte.gestorben();
     }
 
     @Override
@@ -156,7 +164,24 @@ public final class Karte implements Module {
                 String[] teile = v.split("[ /|]+");
                 Testing.check(teile[0].equals(teile[1]), "Seed-Biome = Welt (" + teile[0] + "/" + teile[1] + ")");
                 Testing.check(Integer.parseInt(teile[2]) >= Integer.parseInt(teile[3]) * 8 / 10, "Seed-Höhen = Welt ±2 (" + teile[2] + "/" + teile[3] + ")");
-                Testing.done();
+                // Todespunkt: abseits sterben, wiederbeleben, hingehen
+                client.api.Waypoints.remove(T.t("wp.tod"));   // Rest eines abgebrochenen Laufs
+                Testing.command("tp @s ~60 ~ ~");
+                Tasks.later(10, () -> {
+                    Testing.command("kill @s");
+                    Testing.await("Todespunkt gesetzt", () -> Wegpunkte.todespunkt() != null, 100, () -> {
+                        var w = Wegpunkte.todespunkt();
+                        var mc = Minecraft.getInstance();
+                        mc.player.respawn();
+                        mc.gui.setScreen(null);
+                        // erst weiter, wenn der Server wirklich wiederbelebt hat (Spieler am Spawn), sonst geht das tp vorher verloren
+                        Testing.await("Wiederbelebt, Todespunkt noch da", () -> w != null && mc.player.isAlive()
+                                && !mc.player.blockPosition().closerThan(w.pos(), 20) && Wegpunkte.todespunkt() != null, 100, () -> {
+                            if (w != null) Testing.command("tp @s " + w.pos().getX() + " " + w.pos().getY() + " " + w.pos().getZ());
+                            Testing.await("Todespunkt beim Erreichen gelöscht", () -> Wegpunkte.todespunkt() == null, 100, Testing::done);
+                        });
+                    });
+                });
             }));
         });
     }

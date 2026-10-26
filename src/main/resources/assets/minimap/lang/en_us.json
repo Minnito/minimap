@@ -156,5 +156,10 @@
   "minimap.wp.verschieben": "Move here",
   "minimap.wp.verschieben.info": "Set to your current position",
   "minimap.wp.verschieben.knopf": "Move",
-  "minimap.wp.loeschen": "Delete"
+  "minimap.wp.loeschen": "Delete",
+  "minimap.wp.tod": "Death",
+  "minimap.wp.tod.an": "Death point",
+  "minimap.wp.tod.an.info": "Set a waypoint automatically when you die (replaces the last one)",
+  "minimap.wp.tod.loeschen": "Delete death point on arrival",
+  "minimap.wp.tod.loeschen.info": "Disappears once you get within 4 blocks of where you died"
 }

@@ -1,7 +1,7 @@
 {
   "name": "MiniMap",
   "developer": "Minnito",
-  "version": "1.5.1",
+  "version": "1.6.0",
   "minecraft": ["26.3"],
   "api": "7.1.03",
   "main": "karte.Karte",

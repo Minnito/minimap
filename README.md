@@ -3,16 +3,20 @@
 | | |
 |---|---|
 | **Addon** | MiniMap (ID `minimap`) |
-| **Version** | 1.5.1 |
+| **Version** | 1.6.0 |
 | **Developer** | Minnito / Claude |
 | **Platform** | Client addon for the Swift Client, API 7.1.03, Minecraft 26.3 |
 | **Language / build** | Java 25 (`--release 25`), Gradle 9.4.1 (wrapper) |
 | **Status** | 2026-10-26 |
-| **Build** | `build/libs/minimap.jar`, 123,829 bytes, SHA-256 `e32e3e52d81b4b1a22f8ad3bf7561fd4778ec64e8a4b7bb2bbc2f8bf9485ee4b` |
-| **Self-test** | `gradlew runTest`: 21 of 21 checks passed (2026-10-26, 17:16, client 7.1.03) |
-| **Download** | [Release v1.5.1](https://github.com/Minnito/minimap/releases/tag/v1.5.1) (API 7.1.03). Older releases up to v1.4.0 are built for API 6.2.1 and no longer load on clients from 7.1.03 on |
+| **Build** | `build/libs/minimap.jar`, 125,688 bytes, SHA-256 `e51e0f0d34b1e5bd0466efb3046bbffdac1a8c8a21c0b237cf7580e202ecca50` |
+| **Self-test** | `gradlew runTest`: 24 of 24 checks passed (2026-10-26, 22:44, client 7.1.03) |
+| **Download** | [Release v1.6.0](https://github.com/Minnito/minimap/releases/tag/v1.6.0) (API 7.1.03). Older releases up to v1.4.0 are built for API 6.2.1 and no longer load on clients from 7.1.03 on |
 
 ---
+
+## What's new in 1.6.0
+
+- **Death point.** When you die, a red waypoint "Tod" / "Death" is set where you died. There is only one: a new death replaces it. Once you get within 4 blocks of it, it disappears by itself. It belongs to MiniMap, so you can edit or delete it in the manager like any other waypoint; renamed, it becomes a normal waypoint and stays. Both can be switched off in the waypoint manager ("Death point", "Delete death point on arrival").
 
 ## What's new in 1.5.1
 
@@ -75,6 +79,7 @@ A minimap and world map in the style of JourneyMap and Xaero's Minimap that runs
 ### Waypoints (`B` = set here, `N` = manager)
 - Shown in the world as a small colored square with symbol and name, at a fixed size in real screen pixels like Xaero (independent of distance and GUI scale); distance shown when you look at it (setting: when looking, always, never)
 - Manager with list, new, edit, delete; custom symbol (1 to 2 characters) and visibility per waypoint
+- Death point: set automatically on death, deleted on arrival (both can be switched off in the manager)
 - Stored via the client API (`Waypoints`). Waypoints from other addons are shown but cannot be edited
 
 ### Other
@@ -96,7 +101,7 @@ A minimap and world map in the style of JourneyMap and Xaero's Minimap that runs
 | `SeedKarte` | 477 | Biomes and terrain height from the seed via `MultiNoiseBiomeSource` / `NoiseBasedChunkGenerator`; thread pool, PNG cache, comparison against the real world |
 | `Ansicht` | 248 | World ↔ screen conversion (center, scale, rotation); shared drawing of waypoints, radar and player arrow |
 | `Gesicht` | 115 | Creature face from its own texture: model part `head`, largest cube, front face. Works for all creatures without custom images |
-| `Wegpunkte` | 222 | In-world waypoints and the manager |
+| `Wegpunkte` | 252 | In-world waypoints, the manager and the death point |
 | `Biomfarben` | 38 | Biome colors as in Chunkbase/Amidst; unknown biomes get a fixed color derived from their name |
 | `Umzug` | 101 | One-time migration from the old ID `karte` to `minimap` (settings, folders, key bindings, waypoint owner) |
 | `T` | 19 | Translations from `assets/minimap/lang/` |
@@ -129,6 +134,7 @@ All work happened on 2026-10-25, from onboarding to the finished 1.3.0 build and
 8. **Version 1.4.0 (evening).** Measured freezes in the self-test with temporary timing points, then moved all file reading and writing off the render thread (see "What's new in 1.4.0"). Waypoints in the world switched to a fixed size in real screen pixels after a side-by-side comparison with Xaero's Minimap.
 9. **Version 1.5.0 (2026-10-26).** Clients from 7.1.03 on no longer load addons built for older APIs. `module.json` now has `"api": "7.1.03"` and `"minecraft": ["26.3"]`, and `build.gradle` follows the 7.1.03 template (the seed-42 test world stays). No code changes were needed: every client API call still exists. `runTest` passed 21 of 21 checks.
 10. **Version 1.5.1 (2026-10-26).** Found the cause of black bars on the world map reported on servers: servers sometimes send a chunk empty first, and the cave scan saved it as solid stone over good data. Empty chunks are now skipped and scanned again later. `runTest` passed 21 of 21 checks.
+11. **Version 1.6.0 (2026-10-26).** Death point built into MiniMap (first tried as a separate addon, then merged here so the point belongs to MiniMap and can be edited in the manager). `runTest` passed 24 of 24 checks.
 
 ## 5. Fixed bugs and implemented ideas
 
@@ -157,7 +163,7 @@ PASS Übersetzungen geladen (de_DE: Minimap anzeigen)     [translations loaded]
 PASS Wegpunkt anlegen, Symbol „T", löschen, Entfernung „458,9m"  [create waypoint, symbol, delete, distance]
 PASS Seed aus Chunkbase-Link lesen                       [read seed from Chunkbase link]
 PASS Biom aus Seed berechnet (dark_forest)               [biome computed from seed]
-PASS Gelände aus Seed gemalt (854 ms je Kachel)          [terrain painted from seed, 854 ms per tile]
+PASS Gelände aus Seed gemalt (820 ms je Kachel)          [terrain painted from seed, 820 ms per tile]
 PASS Höhenansicht für jede Y-Höhe                        [view for any Y level]
 PASS Karte gemalt                                        [map painted]
 PASS Tag, Nacht und Topo gespeichert                     [day, night and topo saved]
@@ -168,6 +174,9 @@ PASS Weltname eindeutig (localhost_25598)                [world name unique]
 PASS Zombie-Gesicht aus der Textur (8, 8, 8 × 8)         [zombie face from texture]
 PASS Seed-Biome = Welt (25/25)                           [seed biomes = world]
 PASS Seed-Höhen = Welt ±2 (25/25)                        [seed heights = world ±2]
+PASS Todespunkt gesetzt                                  [death point set]
+PASS Wiederbelebt, Todespunkt noch da                    [respawned, death point still there]
+PASS Todespunkt beim Erreichen gelöscht                  [death point deleted on arrival]
 ```
 
 The GitHub Action (`.github/workflows/build.yml`) only builds the jar on every push. `runTest` needs OpenGL and therefore runs locally.
