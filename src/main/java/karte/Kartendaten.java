@@ -316,6 +316,9 @@ final class Kartendaten {
         Tile tag = tile(Ebene.of(Typ.TAG), tx, tz, true), nacht = tile(Ebene.of(Typ.NACHT), tx, tz, true);
         Tile topo = tile(Ebene.of(Typ.TOPO), tx, tz, true);
         if (tag == null || nacht == null || topo == null) return false;
+        // Server schicken Chunks teils erst leer (Platzhalter, schnelles Fliegen): nicht abtasten, sonst würde die Höhlenkarte
+        // gute Daten mit „fester Stein“ (fast schwarz) überschreiben. false = später erneut versuchen.
+        if (leer(level.getChunk(cx, cz).getSections())) return false;
         if (hoehlen.scan(level, cx, cz)) version++;
         int minY = level.getMinY();
         var blockLight = level.getLightEngine().getLayerListener(LightLayer.BLOCK);
@@ -337,6 +340,11 @@ final class Kartendaten {
                 }
             }
         }
+        return true;
+    }
+
+    static boolean leer(LevelChunkSection[] sections) {
+        for (var s : sections) if (!s.hasOnlyAir()) return false;
         return true;
     }
 

@@ -3,16 +3,20 @@
 | | |
 |---|---|
 | **Addon** | MiniMap (ID `minimap`) |
-| **Version** | 1.5.0 |
+| **Version** | 1.5.1 |
 | **Developer** | Minnito / Claude |
 | **Platform** | Client addon for the Swift Client, API 7.1.03, Minecraft 26.3 |
 | **Language / build** | Java 25 (`--release 25`), Gradle 9.4.1 (wrapper) |
 | **Status** | 2026-10-26 |
-| **Build** | `build/libs/minimap.jar`, 123,611 bytes, SHA-256 `46af2c84c1a2704be098ed1e07bb05479e11d85ec48c867ffd3560f190a3d4d1` |
-| **Self-test** | `gradlew runTest`: 21 of 21 checks passed (2026-10-26, 12:11, client 7.1.03) |
-| **Download** | [Release v1.5.0](https://github.com/Minnito/minimap/releases/tag/v1.5.0) (API 7.1.03). Older releases up to v1.4.0 are built for API 6.2.1 and no longer load on clients from 7.1.03 on |
+| **Build** | `build/libs/minimap.jar`, 123,829 bytes, SHA-256 `e32e3e52d81b4b1a22f8ad3bf7561fd4778ec64e8a4b7bb2bbc2f8bf9485ee4b` |
+| **Self-test** | `gradlew runTest`: 21 of 21 checks passed (2026-10-26, 17:16, client 7.1.03) |
+| **Download** | v1.5.1 not released yet. [Release v1.5.0](https://github.com/Minnito/minimap/releases/tag/v1.5.0) (API 7.1.03). Older releases up to v1.4.0 are built for API 6.2.1 and no longer load on clients from 7.1.03 on |
 
 ---
+
+## What's new in 1.5.1
+
+- **Black squares on the cave map are gone.** Servers sometimes send a chunk empty first (placeholder, flying fast). The cave scan took it anyway: without a single floor every column counted as solid stone (`FEST`, almost black), and it replaced good data saved for that chunk. On the world map these squares added up to black bars and clusters. Empty chunks are now skipped and scanned again later, so saved data is never overwritten by an empty chunk. Black areas already saved stay until the chunk is scanned again.
 
 ## What's new in 1.5.0
 
@@ -124,6 +128,7 @@ All work happened on 2026-10-25, from onboarding to the finished 1.3.0 build and
 7. **Build and test (13:10 to 13:11).** Built `minimap.jar`, `runTest` passed 21 of 21 checks.
 8. **Version 1.4.0 (evening).** Measured freezes in the self-test with temporary timing points, then moved all file reading and writing off the render thread (see "What's new in 1.4.0"). Waypoints in the world switched to a fixed size in real screen pixels after a side-by-side comparison with Xaero's Minimap.
 9. **Version 1.5.0 (2026-10-26).** Clients from 7.1.03 on no longer load addons built for older APIs. `module.json` now has `"api": "7.1.03"` and `"minecraft": ["26.3"]`, and `build.gradle` follows the 7.1.03 template (the seed-42 test world stays). No code changes were needed: every client API call still exists. `runTest` passed 21 of 21 checks.
+10. **Version 1.5.1 (2026-10-26).** Found the cause of black bars on the world map reported on servers: servers sometimes send a chunk empty first, and the cave scan saved it as solid stone over good data. Empty chunks are now skipped and scanned again later. `runTest` passed 21 of 21 checks.
 
 ## 5. Fixed bugs and implemented ideas
 
