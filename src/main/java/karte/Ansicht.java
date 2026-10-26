@@ -2,7 +2,6 @@ package karte;
 
 import client.api.AddonConfig;
 import client.api.Draw;
-import client.api.Waypoints;
 import com.mojang.blaze3d.platform.NativeImage;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -106,6 +105,9 @@ final class Ansicht {
         private final String prefix;
         private final boolean[] an = new boolean[Art.values().length];
         boolean wegpunkte, namen, koepfe;
+        // Kreaturen, die dieser Filter zeigt – je Spiel-Tick einmal gesucht (Positionen ändern sich nur je Tick)
+        private final ArrayList<Entity> kandidaten = new ArrayList<>();
+        private long kandidatenTick = Long.MIN_VALUE;
 
         Filter(AddonConfig cfg, String prefix) {
             this.cfg = cfg;
@@ -142,13 +144,19 @@ final class Ansicht {
     void radar(GuiGraphicsExtractor g, Filter f, Rand rand, int kopf) {
         var mc = Minecraft.getInstance();
         if (mc.level == null) return;
-        var sichtbar = new ArrayList<Entity>();
-        for (Entity e : mc.level.entitiesForRendering()) {
-            if (e == mc.player || !e.isAlive()) continue;
-            Art a = Art.von(e);
-            if (a == null || !f.zeigt(a)) continue;
-            if (rand.innen(sx(e.getX(), e.getZ()) - ox, sy(e.getX(), e.getZ()) - oy)) sichtbar.add(e);
+        long tick = mc.level.getGameTime();
+        if (f.kandidatenTick != tick) {
+            f.kandidatenTick = tick;
+            f.kandidaten.clear();
+            for (Entity e : mc.level.entitiesForRendering()) {
+                if (e == mc.player || !e.isAlive()) continue;
+                Art a = Art.von(e);
+                if (a != null && f.zeigt(a)) f.kandidaten.add(e);
+            }
         }
+        var sichtbar = new ArrayList<Entity>();
+        for (Entity e : f.kandidaten)
+            if (rand.innen(sx(e.getX(), e.getZ()) - ox, sy(e.getX(), e.getZ()) - oy)) sichtbar.add(e);
         sichtbar.sort(Comparator.comparingDouble(e -> (e.getX() - cx) * (e.getX() - cx) + (e.getZ() - cz) * (e.getZ() - cz)));
         // von hinten nach vorn: die nächsten liegen oben
         for (int i = sichtbar.size() - 1; i >= 0; i--) {
@@ -171,28 +179,22 @@ final class Ansicht {
 
     void wegpunkte(GuiGraphicsExtractor g, Filter f, Rand rand) {
         if (!f.wegpunkte) return;
-        var font = Minecraft.getInstance().font;
-        String dim = Waypoints.dimension();
-        for (var w : Waypoints.all()) {
-            if (!w.dimension().equals(dim)) continue;
+        for (var w : Wegpunkte.sichtbarHier()) {
             double wx = w.pos().getX() + 0.5, wz = w.pos().getZ() + 0.5;
             float dx = sx(wx, wz) - ox, dy = sy(wx, wz) - oy;
             boolean innen = rand.innen(dx, dy);
             float[] p = rand.klemmen(dx, dy);
             int x = Math.round(ox + p[0]), y = Math.round(oy + p[1]);
-            if (!Wegpunkte.sichtbar(w)) continue;
             if (schrift == 1) Wegpunkte.symbolKasten(g, w, x, y);        // Weltkarte: Quadrat mit Symbol wie in der Welt
             else {                                                        // Minimap (echte Pixel): schlichtes Farbquadrat
                 rechteck(g, x - 4, y - 4, 8, 8, 0xFF000000);
                 rechteck(g, x - 3, y - 3, 6, 6, w.argb() | 0xFF000000);
             }
             if (innen && f.namen) {
-                int tw = font.width(w.name());
                 g.pose().pushMatrix();
                 g.pose().translate(x, y + (schrift == 1 ? 8 : 5));   // unter dem (größeren) Symbolquadrat der Weltkarte
                 g.pose().scale(schrift, schrift);
-                Ansicht.rechteck(g, -tw / 2 - 2, 0, tw + 4, 10, 0x90000000);
-                Draw.text(g, w.name(), -tw / 2, 1);
+                Stil.schild(g, w.name(), 0, 0);
                 g.pose().popMatrix();
             }
         }

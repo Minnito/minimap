@@ -32,6 +32,7 @@ final class Wegpunkte {
 
     private final AddonConfig cfg;
     private boolean inWelt, todAn, todLoeschen;
+    private boolean totWartet;   // gestorben, noch nicht wiederbelebt: so lange nicht „erreicht“ – man steht ja noch dort
     private int entfernung;
 
     Wegpunkte(AddonConfig cfg) {
@@ -54,11 +55,18 @@ final class Wegpunkte {
     void gestorben() {
         var p = Minecraft.getInstance().player;
         if (todAn && p != null) Waypoints.add(T.t("wp.tod"), p.blockPosition(), TOD_FARBE);   // ersetzt den letzten
+        totWartet = true;
+    }
+
+    /** Wiederbelebt, Welt betreten oder verlassen: ab jetzt zählt Hingehen wieder. */
+    void lebt() {
+        totWartet = false;
     }
 
     void ankunft() {
         var p = Minecraft.getInstance().player;
-        if (!todLoeschen || p == null || !p.isAlive()) return;     // auf dem Todesbildschirm steht man noch genau dort
+        // isAlive allein reicht nicht: direkt nach dem Tod meldet der Client die Figur teils noch kurz als lebendig
+        if (!todLoeschen || totWartet || p == null || !p.isAlive()) return;
         var w = todespunkt();
         if (w != null && w.dimension().equals(Waypoints.dimension()) && p.blockPosition().closerThan(w.pos(), TOD_NAH))
             Waypoints.remove(w.name());
@@ -82,6 +90,17 @@ final class Wegpunkte {
 
     static boolean eigen(Waypoints.Waypoint w) {
         return w.addon().equals(ADDON);
+    }
+
+    // Sichtbare Wegpunkte dieser Dimension, je Tick neu (Karte.tick): all() kopiert und die Config-Abfragen kosten jedes Bild
+    private static List<Waypoints.Waypoint> sichtbarHier = List.of();
+
+    static void aktualisieren() {
+        sichtbarHier = hier().stream().filter(Wegpunkte::sichtbar).toList();
+    }
+
+    static List<Waypoints.Waypoint> sichtbarHier() {
+        return sichtbarHier;
     }
 
     static List<Waypoints.Waypoint> hier() {
@@ -120,8 +139,7 @@ final class Wegpunkte {
         // Wie Xaero: feste Größe in echten Bildschirmpixeln – unabhängig von GUI-Skalierung und Entfernung
         float k = GROESSE / (float) mc.getWindow().getGuiScale();
         // weit entfernte zuerst, damit nahe obenauf liegen
-        var liste = new ArrayList<>(hier());
-        liste.removeIf(w -> !sichtbar(w));
+        var liste = new ArrayList<>(sichtbarHier);
         liste.sort(Comparator.comparingDouble(Wegpunkte::abstand).reversed());
         for (var w : liste) {
             var s = Draw.project(new Vec3(w.pos().getX() + 0.5, w.pos().getY() + 1.2, w.pos().getZ() + 0.5));

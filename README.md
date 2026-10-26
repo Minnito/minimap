@@ -3,16 +3,32 @@
 | | |
 |---|---|
 | **Addon** | MiniMap (ID `minimap`) |
-| **Version** | 1.6.0 |
+| **Version** | 1.7.0 |
 | **Developer** | Minnito / Claude |
 | **Platform** | Client addon for the Swift Client, API 7.1.03, Minecraft 26.3 |
 | **Language / build** | Java 25 (`--release 25`), Gradle 9.4.1 (wrapper) |
-| **Status** | 2026-10-26 |
-| **Build** | `build/libs/minimap.jar`, 125,688 bytes, SHA-256 `e51e0f0d34b1e5bd0466efb3046bbffdac1a8c8a21c0b237cf7580e202ecca50` |
-| **Self-test** | `gradlew runTest`: 24 of 24 checks passed (2026-10-26, 22:44, client 7.1.03) |
-| **Download** | [Release v1.6.0](https://github.com/Minnito/minimap/releases/tag/v1.6.0) (API 7.1.03). Older releases up to v1.4.0 are built for API 6.2.1 and no longer load on clients from 7.1.03 on |
+| **Status** | 2026-10-27 |
+| **Build** | `build/libs/minimap.jar`, 130,779 bytes, SHA-256 `f3f4cb902648c98a9aefcfce8234b1df2cefbc7a5457063fae471109f68af858` |
+| **Self-test** | `gradlew runTest`: 25 of 25 checks passed (2026-10-27, 00:00, client 7.1.03) |
+| **Download** | [Release v1.7.0](https://github.com/Minnito/minimap/releases/tag/v1.7.0) (API 7.1.03). Older releases up to v1.4.0 are built for API 6.2.1 and no longer load on clients from 7.1.03 on |
 
 ---
+
+## What's new in 1.7.0
+
+### New look
+- **One typeface.** All text on the minimap and world map uses the client's menu font (`Draw.ui`) instead of a mix of the pixel font and the menu font.
+- **Clear contrast.** Dark panels with light text (16.2:1) and muted text (7.7:1). The accent is the client's HUD color; if that is white, grey or a gradient, the pink of the client menus. Text on the accent uses whichever color has the higher contrast (on the pink: dark, 5.6:1). The self-test fails if any of these drops below 4.5:1.
+- **Minimap:** solid frame with a light shadow, compass with "N" in the accent color, info lines on one shared plate instead of single black boxes.
+- **World map:** map type as one segmented control at the top left. The nine filters moved behind a "Show" button as a list with check boxes (filled = on, not color alone). Follow and zoom as a compact bar with drawn icons, positions in two panels at the bottom, right-click menu and tooltips in the same style.
+- All colors and the font live in one place: `Stil`.
+
+### Faster
+Measured in the self-test, per frame. Minimap: 290–400 µs before, 220–260 µs now. Info lines, visible waypoints and radar candidates are now built once per tick instead of every frame (waypoints 48 → 8 µs, info lines 50 → 18 µs, radar ~90 → ~73 µs); the menu font costs about 20 µs of that back. World map controls: 355 → 160–180 µs.
+
+### Bug fixes
+- **Death point could vanish right away.** Right after dying, the client sometimes still reports the player as alive for a moment. If the arrival check ran then, it deleted the new death point, because you are standing on it. Arrival now only counts after respawning.
+- **Self-test drifted.** The death point test left the test player 60 blocks further away on every run (the test world is kept), which sometimes broke the seed comparison. The player now returns to the start.
 
 ## What's new in 1.6.0
 
@@ -58,13 +74,13 @@ A minimap and world map in the style of JourneyMap and Xaero's Minimap that runs
 - Square or circle; the circle can optionally rotate with your view direction
 - Adjustable size, 7 zoom levels (0.125 to 8 GUI pixels per block, keys `+` / `-`)
 - Map type Auto, Day, Night, Topo or Cave (key `[`). Auto uses Cave underground and Night at night
-- Compass (N, E, S, W) on the border, chunk grid
+- Compass (N, E, S, W) on the frame, N in the accent color; chunk grid
 - Radar: monsters, animals, pets, villagers and players, each filterable, shown as a head or a 2×2 dot
-- Four info lines (two above, two below): play time, coordinates, biome, dimension, FPS, Minecraft day or light level
+- Four info lines (two above, two below, each group on one plate): play time, coordinates, biome, dimension, FPS, Minecraft day or light level
 - Drawn in real screen pixels so it stays sharp even at high GUI scale
 
 ### World map (`J`)
-- Map types and filters at the top, zoom on the left, player and mouse positions at the bottom
+- Map type at the top left, "Show" list (creatures, heads, waypoints, grid, seed map) at the top right, follow and zoom on the left, player and mouse positions at the bottom
 - Y slider for the cave view; switching layers cross-fades over 220 ms
 - Hold left mouse button = pan, mouse wheel = zoom, arrow keys = pan 16 blocks, space = back to you, `F` = follow you, `C` = copy coordinates, `B` = waypoint at the mouse
 - Right-click menu: set or delete a waypoint, manage waypoints, copy coordinates or send them to chat, center here, show distance
@@ -89,21 +105,22 @@ A minimap and world map in the style of JourneyMap and Xaero's Minimap that runs
 
 ## 3. Architecture
 
-12 classes in package `karte`, 3,023 lines in total.
+13 classes in package `karte`, 3,282 lines in total.
 
 | Class | Lines | Purpose |
 |---|---:|---|
-| `Karte` | 189 | Entry point (`client.api.Module`): keys, HUD, settings, lifecycle (`join`, `leave`, `unload`), self-test |
+| `Karte` | 230 | Entry point (`client.api.Module`): keys, HUD, settings, lifecycle (`join`, `leave`, `unload`), self-test |
 | `Kartendaten` | 529 | Scans loaded chunks and paints one pixel per block into tiles of 256 × 256 blocks, separated by layer. Order: rings around the player, nearest first. Time budget 4 ms per tick. All file reading and writing runs on one background thread (`minimap-dateien`) |
 | `Hoehlen` | 287 | Cave data for any Y level: per block column, the floors (solid block with air above) with color and ceiling. Any height can be derived from this instantly |
-| `Minimap` | 298 | Composes the minimap image on the CPU from the tiles; only recomputes when something changed |
-| `Vollbild` | 500 | World map: controls, buttons, right-click menu, cross-fade, seed map as underlay |
+| `Minimap` | 319 | Composes the minimap image on the CPU from the tiles; only recomputes when something changed. Frame, compass and info plates |
+| `Vollbild` | 566 | World map: segmented map type, "Show" list, zoom bar, Y slider, right-click menu, cross-fade, seed map as underlay |
 | `SeedKarte` | 477 | Biomes and terrain height from the seed via `MultiNoiseBiomeSource` / `NoiseBasedChunkGenerator`; thread pool, PNG cache, comparison against the real world |
-| `Ansicht` | 248 | World ↔ screen conversion (center, scale, rotation); shared drawing of waypoints, radar and player arrow |
+| `Ansicht` | 250 | World ↔ screen conversion (center, scale, rotation); shared drawing of waypoints, radar and player arrow |
 | `Gesicht` | 115 | Creature face from its own texture: model part `head`, largest cube, front face. Works for all creatures without custom images |
-| `Wegpunkte` | 252 | In-world waypoints, the manager and the death point |
+| `Wegpunkte` | 270 | In-world waypoints, the manager and the death point |
 | `Biomfarben` | 38 | Biome colors as in Chunkbase/Amidst; unknown biomes get a fixed color derived from their name |
 | `Umzug` | 101 | One-time migration from the old ID `karte` to `minimap` (settings, folders, key bindings, waypoint owner) |
+| `Stil` | 73 | Colors, font and contrast of the map UI in one place; accent from the client's HUD color |
 | `T` | 19 | Translations from `assets/minimap/lang/` |
 
 **Data flow:** `Kartendaten` (and `Hoehlen` inside it) scan chunks every tick within the time budget → tiles as `NativeImage` + GPU texture → `Minimap` and `Vollbild` draw from them via `Ansicht`. `SeedKarte` supplies the computed underlay beneath the explored map.
@@ -135,6 +152,7 @@ All work happened on 2026-10-25, from onboarding to the finished 1.3.0 build and
 9. **Version 1.5.0 (2026-10-26).** Clients from 7.1.03 on no longer load addons built for older APIs. `module.json` now has `"api": "7.1.03"` and `"minecraft": ["26.3"]`, and `build.gradle` follows the 7.1.03 template (the seed-42 test world stays). No code changes were needed: every client API call still exists. `runTest` passed 21 of 21 checks.
 10. **Version 1.5.1 (2026-10-26).** Found the cause of black bars on the world map reported on servers: servers sometimes send a chunk empty first, and the cave scan saved it as solid stone over good data. Empty chunks are now skipped and scanned again later. `runTest` passed 21 of 21 checks.
 11. **Version 1.6.0 (2026-10-26).** Death point built into MiniMap (first tried as a separate addon, then merged here so the point belongs to MiniMap and can be edited in the manager). `runTest` passed 24 of 24 checks.
+12. **Version 1.7.0 (2026-10-26/27).** Redesign of minimap and world map after a review against Apple's HIG and frontend design guidelines: before/after screenshots and per-frame timings from temporary hooks in the self-test (removed again). Per-tick caching kept where it measurably helped; caching the menu-font texts was within noise and reverted. Fixed the death point race and the drifting test player. `runTest` passed 25 of 25 checks, three runs in a row.
 
 ## 5. Fixed bugs and implemented ideas
 
@@ -160,6 +178,7 @@ PASS Nächster Ring zuerst, im Uhrzeigersinn ab Norden    [nearest ring first, c
 PASS Einstellungen: Hauptseite + kurze Unterseiten       [settings: main page + short sub-pages]
 PASS Umzug: Wegpunkte von „karte" gehören jetzt „minimap"  [migration: waypoints now owned by minimap]
 PASS Übersetzungen geladen (de_DE: Minimap anzeigen)     [translations loaded]
+PASS Kontrast: Text, leiser Text und Schrift auf dem Akzent (E0679F, 5.6:1)  [contrast of text, muted text and text on the accent]
 PASS Wegpunkt anlegen, Symbol „T", löschen, Entfernung „458,9m"  [create waypoint, symbol, delete, distance]
 PASS Seed aus Chunkbase-Link lesen                       [read seed from Chunkbase link]
 PASS Biom aus Seed berechnet (dark_forest)               [biome computed from seed]

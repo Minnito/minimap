@@ -59,6 +59,8 @@ public final class Karte implements Module {
         while (wpNeuKey.consumeClick()) Wegpunkte.hierSetzen();
         while (wpListeKey.consumeClick()) wegpunkte.oeffnen();
         if (++takt % 10 == 0) wegpunkte.ankunft();
+        Wegpunkte.aktualisieren();
+        minimap.tick();
         daten.tick();
     }
 
@@ -68,7 +70,13 @@ public final class Karte implements Module {
     }
 
     @Override
+    public void respawn() {
+        wegpunkte.lebt();
+    }
+
+    @Override
     public void leave() {
+        wegpunkte.lebt();
         daten.close();
         Gesicht.leeren();
     }
@@ -108,6 +116,10 @@ public final class Karte implements Module {
                     .equals("[{\"name\":\"Home\",\"addon\":\"minimap\"},{\"name\":\"X\",\"addon\":\"karteplus\"},{\"addon\": \"minimap\"}]"),
                 "Umzug: Wegpunkte von „karte“ gehören jetzt „minimap“");
             Testing.check(T.t("name").equals("MiniMap") && !T.t("mm.anzeigen").startsWith("minimap."), "Übersetzungen geladen (" + T.locale() + ": " + T.t("mm.anzeigen") + ")");
+            Testing.check(Stil.kontrast(Stil.TEXT, Stil.RAHMEN) >= 7 && Stil.kontrast(Stil.LEISE, Stil.RAHMEN) >= 4.5
+                    && Stil.kontrast(Stil.aufAkzent(), Stil.akzent()) >= 4.5,
+                "Kontrast: Text, leiser Text und Schrift auf dem Akzent (" + String.format("%06X", Stil.akzent() & 0xFFFFFF) + ", "
+                    + String.format(java.util.Locale.ROOT, "%.1f", Stil.kontrast(Stil.aufAkzent(), Stil.akzent())) + ":1)");
             Testing.check(Wegpunkte.selbsttest(), "Wegpunkt anlegen, Symbol „T“, löschen, Entfernung „458,9m“");
             Testing.check(Long.valueOf(-123456789L).equals(SeedKarte.seed("https://www.chunkbase.com/apps/seed-map#seed=-123456789&platform=java_1_21_9&dimension=overworld&x=0&z=0&zoom=0.5"))
                 && Long.valueOf(42L).equals(SeedKarte.seed("42")) && SeedKarte.seed("hallo") == null, "Seed aus Chunkbase-Link lesen");
@@ -166,6 +178,7 @@ public final class Karte implements Module {
                 Testing.check(Integer.parseInt(teile[2]) >= Integer.parseInt(teile[3]) * 8 / 10, "Seed-Höhen = Welt ±2 (" + teile[2] + "/" + teile[3] + ")");
                 // Todespunkt: abseits sterben, wiederbeleben, hingehen
                 client.api.Waypoints.remove(T.t("wp.tod"));   // Rest eines abgebrochenen Laufs
+                var start = Minecraft.getInstance().player.blockPosition();   // danach zurück: die Testwelt bleibt bestehen
                 Testing.command("tp @s ~60 ~ ~");
                 Tasks.later(10, () -> {
                     Testing.command("kill @s");
@@ -178,7 +191,10 @@ public final class Karte implements Module {
                         Testing.await("Wiederbelebt, Todespunkt noch da", () -> w != null && mc.player.isAlive()
                                 && !mc.player.blockPosition().closerThan(w.pos(), 20) && Wegpunkte.todespunkt() != null, 100, () -> {
                             if (w != null) Testing.command("tp @s " + w.pos().getX() + " " + w.pos().getY() + " " + w.pos().getZ());
-                            Testing.await("Todespunkt beim Erreichen gelöscht", () -> Wegpunkte.todespunkt() == null, 100, Testing::done);
+                            Testing.await("Todespunkt beim Erreichen gelöscht", () -> Wegpunkte.todespunkt() == null, 100, () -> {
+                                Testing.command("tp @s " + start.getX() + " " + start.getY() + " " + start.getZ());
+                                Tasks.later(10, Testing::done);
+                            });
                         });
                     });
                 });

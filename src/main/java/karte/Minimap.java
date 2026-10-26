@@ -19,7 +19,7 @@ import net.minecraft.world.level.levelgen.Heightmap;
 // Rahmen mit Kompass, Wegpunkte, Entity-Radar, Spielerpfeil und vier Info-Zeilen (1–2 oben, 3–4 unten).
 final class Minimap {
     static final double[] ZOOM = {0.125, 0.25, 0.5, 1, 2, 4, 8};   // GUI-Pixel je Block
-    private static final int ZEILE = 12;
+    private static final int ZEILE = 10;
 
     enum Modus {
         AUTO, TAG, NACHT, TOPO, HOEHLE;
@@ -44,6 +44,8 @@ final class Minimap {
     private int size, zoom;
     private Modus modus;
     private final Info[] slots = new Info[4];
+    private final String[] texte = new String[4];   // je Tick neu – ändern sich nicht schneller, Biom/Format sind teuer
+    private final int[] breiten = new int[4];
 
     private NativeImage bild;
     private Identifier bildId;
@@ -64,6 +66,14 @@ final class Minimap {
         modus = Modus.valueOf(cfg.text("mm_modus", "AUTO"));
         Info[] std = {Info.LEER, Info.ZEIT, Info.ORT, Info.BIOM};
         for (int i = 0; i < 4; i++) slots[i] = Info.valueOf(cfg.text("mm_info" + i, std[i].name()));
+    }
+
+    void tick() {
+        if (mc().player == null || mc().level == null) return;
+        for (int i = 0; i < 4; i++) {
+            texte[i] = slots[i] == Info.LEER ? null : info(slots[i]).getString();
+            breiten[i] = texte[i] == null ? 0 : Stil.breite(texte[i]);
+        }
     }
 
     void umschalten() {
@@ -110,20 +120,21 @@ final class Minimap {
 
     HudElement hud() {
         int oben = zeilen(0, 2), unten = zeilen(2, 4);
-        return new HudElement(Karte.ID, T.t("hud.minimap"), 1, 0, -size - 8, 6, size, oben + size + unten + 4, this::zeichne).visibleIf(() -> an);
+        return new HudElement(Karte.ID, T.t("hud.minimap"), 1, 0, -size - 8, 6, size, oben + size + 6 + unten, this::zeichne).visibleIf(() -> an);
     }
 
+    /** Höhe einer Info-Platte samt Abstand zur Karte; 0 = keine Zeile in diesem Bereich. */
     private int zeilen(int von, int bis) {
         int n = 0;
         for (int i = von; i < bis; i++) if (slots[i] != Info.LEER) n++;
-        return n * ZEILE;
+        return n == 0 ? 0 : n * ZEILE + 6 + 4;
     }
 
     private void zeichne(GuiGraphicsExtractor g, int x, int y) {
         var mc = mc();
         var p = mc.player;
         if (p == null || mc.level == null) return;
-        int my = y + zeilen(0, 2) + 2;
+        int my = y + zeilen(0, 2) + 3;
         float half = size / 2f;
 
         var a = new Ansicht();
@@ -134,13 +145,15 @@ final class Minimap {
         a.oy = my + half;
         a.drehung(kreis && drehen ? p.getYRot() : 180);
 
-        // Rahmen
+        // Rahmen: deckend mit feiner Kontur, leichter Schatten hebt ihn von hellem Gelände ab
         if (kreis) {
-            Draw.circle(g, (int) a.ox, (int) a.oy, (int) half + 3, 0xFF15151A);
-            Draw.circle(g, (int) a.ox, (int) a.oy, (int) half + 2, 0xFF5A5A64);
+            Draw.circle(g, (int) a.ox, (int) a.oy + 1, (int) half + 5, 0x40000000);
+            Draw.circle(g, (int) a.ox, (int) a.oy, (int) half + 3, Stil.RAHMEN);
+            Draw.circle(g, (int) a.ox, (int) a.oy, (int) half + 1, Stil.LINIE);
         } else {
-            Draw.roundRect(g, x - 3, my - 3, size + 6, size + 6, 3, 0xFF15151A);
-            Draw.roundRect(g, x - 2, my - 2, size + 4, size + 4, 2, 0xFF5A5A64);
+            Draw.dropShadow(g, x - 3, my - 3, size + 6, size + 6, 5, 0, 1, 4, 0x50000000);
+            Draw.roundRect(g, x - 3, my - 3, size + 6, size + 6, 5, Stil.RAHMEN);
+            Ansicht.rechteck(g, x - 1, my - 1, size + 2, size + 2, Stil.LINIE);
         }
         // Wie Xaero: Karte und Markierungen in echten Bildschirmpixeln, unabhängig von der GUI-Skalierung
         float k = mc.getWindow().getGuiScale();
@@ -163,17 +176,12 @@ final class Minimap {
         a.scale /= k;
         if (kompass) kompass(g, a, new Ansicht.Rand(kreis, half - 2, half - 2));
 
-        int ly = y;
-        for (int i = 0; i < 4; i++) {
-            if (i == 2) ly = my + size + 4;
-            if (slots[i] == Info.LEER) continue;
-            zeile(g, info(slots[i]), x + size / 2, ly);
-            ly += ZEILE;
-        }
+        platte(g, 0, 2, x + size / 2, y);
+        platte(g, 2, 4, x + size / 2, my + size + 3 + 4);
     }
 
+    // Kompass auf dem Rahmen: Norden in der Akzentfarbe, die anderen leise – zeigt auf einen Blick, wo oben ist
     private void kompass(GuiGraphicsExtractor g, Ansicht a, Ansicht.Rand rand) {
-        var font = mc().font;
         String[] namen = {T.t("kompass.n"), T.t("kompass.o"), T.t("kompass.s"), T.t("kompass.w")};
         int[][] dir = {{0, -1}, {1, 0}, {0, 1}, {-1, 0}};
         for (int i = 0; i < 4; i++) {
@@ -181,15 +189,28 @@ final class Minimap {
             float dy = a.sy(a.cx + dir[i][0] * 1e4, a.cz + dir[i][1] * 1e4) - a.oy;
             float[] e = rand.klemmen(dx, dy);
             int px = Math.round(a.ox + e[0]), py = Math.round(a.oy + e[1]);
-            Draw.circle(g, px, py, 6, 0xE0101014);
-            Draw.text(g, namen[i], px - font.width(namen[i]) / 2 + 1, py - 3);
+            Draw.circle(g, px, py, 6, i == 0 ? Stil.akzent() : Stil.RAHMEN);
+            Stil.text(g, namen[i], px - Stil.breite(namen[i]) / 2, py - 4, i == 0 ? Stil.aufAkzent() : Stil.LEISE);
         }
     }
 
-    private static void zeile(GuiGraphicsExtractor g, Component text, int mitte, int y) {
-        int w = mc().font.width(text);
-        Ansicht.rechteck(g, mitte - w / 2 - 3, y, w + 6, ZEILE - 1, 0xB0000000);
-        Draw.text(g, text, mitte - w / 2, y + 2);
+    // Info-Zeilen eines Bereichs auf einer gemeinsamen Platte: erste Zeile hell, weitere leiser
+    private void platte(GuiGraphicsExtractor g, int von, int bis, int mitte, int y) {
+        int n = 0, w = 0;
+        for (int i = von; i < bis; i++)
+            if (texte[i] != null) {
+                n++;
+                w = Math.max(w, breiten[i]);
+            }
+        if (n == 0) return;
+        w += 12;
+        Stil.panel(g, mitte - w / 2, y, w, n * ZEILE + 6);
+        int ly = y + 4, nr = 0;
+        for (int i = von; i < bis; i++) {
+            if (texte[i] == null) continue;
+            Stil.text(g, texte[i], mitte - breiten[i] / 2, ly, nr++ == 0 ? Stil.TEXT : Stil.LEISE);
+            ly += ZEILE;
+        }
     }
 
     static Component info(Info i) {

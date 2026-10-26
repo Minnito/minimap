@@ -14,7 +14,6 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.ChatScreen;
 import net.minecraft.core.BlockPos;
-import net.minecraft.network.chat.Component;
 import net.minecraft.world.level.levelgen.Heightmap;
 
 // Weltkarte im Stil von JourneyMap: Kartentypen und Filter oben, Zoom links, Positionen unten.
@@ -38,6 +37,7 @@ final class Vollbild {
     private int w, h, mausX, mausY;
     private final List<Knopf> knoepfe = new ArrayList<>();
     private Menue menue;   // offenes Rechtsklick-Menü, null = keins
+    private boolean anzeigenOffen;   // Liste „Anzeigen“ (Kreaturen, Köpfe, Wegpunkte, Gitter, Seed) aufgeklappt
     Runnable manager;      // öffnet den Wegpunkt-Manager (von Karte gesetzt)
 
     private record Knopf(int x, int y, int w, int h, String text, String tipp, boolean aktiv, Runnable aktion) {
@@ -49,16 +49,16 @@ final class Vollbild {
     private record Eintrag(String text, Runnable aktion) {}
 
     /** Rechtsklick-Menü an (x, y) für den Block (bx, bz). */
-    private record Menue(int x, int y, int bx, int bz, List<Eintrag> eintraege) {
-        static final int ZEILE = 14, BREITE = 150;
+    private record Menue(int x, int y, int bx, int bz, List<Eintrag> eintraege, int breite) {
+        static final int ZEILE = 16, KOPF = 20;
 
         int hoehe() {
-            return eintraege.size() * ZEILE + 18;
+            return eintraege.size() * ZEILE + KOPF + 4;
         }
 
         int treffer(double mx, double my) {
-            if (mx < x || mx >= x + BREITE || my < y + 16) return -1;
-            int i = (int) ((my - y - 16) / ZEILE);
+            if (mx < x || mx >= x + breite || my < y + KOPF) return -1;
+            int i = (int) ((my - y - KOPF) / ZEILE);
             return i < eintraege.size() ? i : -1;
         }
     }
@@ -124,8 +124,8 @@ final class Vollbild {
 
     // ───── Y-Slider rechts: Index 0 = Oberfläche, darunter jede Blockhöhe von oben nach unten ─────
     private int sx0() { return w - 24; }
-    private int sy0() { return 44; }
-    private int sy1() { return h - 34; }
+    private int sy0() { return 48; }
+    private int sy1() { return h - 46; }
 
     private int minY() {
         var l = Minecraft.getInstance().level;
@@ -169,20 +169,20 @@ final class Vollbild {
 
     private void zeichneSlider(GuiGraphicsExtractor g, int mx, int my) {
         int x = sx0(), y0 = sy0(), y1 = sy1();
-        Draw.roundRect(g, x - 2, y0 - 8, 18, y1 - y0 + 16, 4, 0xC0141418);
-        Ansicht.rechteck(g, x + 6, y0, 2, y1 - y0, 0xFF505058);
+        Stil.panel(g, x - 2, y0 - 8, 18, y1 - y0 + 16);
+        Ansicht.rechteck(g, x + 6, y0, 2, y1 - y0, Stil.LINIE);
         for (int y = Math.ceilDiv(minY(), 64) * 64; y <= maxY(); y += 64)            // Skala alle 64 Blöcke
-            Ansicht.rechteck(g, x + 3, yVon(maxY() - y + 1), 8, 1, 0xFF505058);
+            Ansicht.rechteck(g, x + 4, yVon(maxY() - y + 1), 6, 1, Stil.LINIE);
         var p = Minecraft.getInstance().player;
-        if (p != null) Ansicht.rechteck(g, x, yVon(maxY() - p.getBlockY() + 1), 14, 1, 0xFFFFFFFF);   // deine Höhe
+        if (p != null) Ansicht.rechteck(g, x + 1, yVon(maxY() - p.getBlockY() + 1), 12, 1, Stil.TEXT);   // deine Höhe
         if (knopf.target() != index()) knopf.to(index());
         int ky = yVon(knopf.value());
-        boolean ueber = schieben || aufSlider(mx, my);
-        Draw.roundRect(g, x, ky - 4, 14, 8, 3, ueber ? 0xFFE070B0 : 0xFFC05090);
+        if (schieben || aufSlider(mx, my)) Draw.roundRect(g, x - 1, ky - 5, 16, 10, 4, Stil.TEXT);   // Hover: heller Ring
+        Draw.roundRect(g, x, ky - 4, 14, 8, 3, Stil.akzent());
         String text = index() == 0 ? T.t("welt.oberflaeche") : "Y " + hoehe;
-        int tw = Minecraft.getInstance().font.width(text);
-        Draw.roundRect(g, x - tw - 12, ky - 6, tw + 8, 12, 3, 0xD0141418);
-        Draw.text(g, text, x - tw - 8, ky - 4);
+        int tw = Stil.breite(text);
+        Draw.roundRect(g, x - tw - 16, ky - 7, tw + 10, 14, 3, Stil.FLAECHE);
+        Stil.text(g, text, x - tw - 11, ky - 3, Stil.TEXT);
     }
 
     private void zeichne(GuiGraphicsExtractor g, int w, int h, int mouseX, int mouseY) {
@@ -258,15 +258,23 @@ final class Vollbild {
 
     private void zeichneMenue(GuiGraphicsExtractor g, int mx, int my) {
         var m = menue;
-        Draw.shadow(g, m.x, m.y, Menue.BREITE, m.hoehe(), 6, 0x80000000);
-        Draw.roundRect(g, m.x, m.y, Menue.BREITE, m.hoehe(), 4, 0xF0141418);
-        Draw.text(g, Draw.sub(m.bx + ", " + hoehe(m.bx, m.bz) + ", " + m.bz), m.x + 6, m.y + 4);
+        Draw.dropShadow(g, m.x, m.y, m.breite, m.hoehe(), Stil.RADIUS, 0, 2, 6, 0x60000000);
+        Draw.roundRect(g, m.x, m.y, m.breite, m.hoehe(), Stil.RADIUS, Stil.RAHMEN);
+        Stil.text(g, titel(m.bx, m.bz), m.x + 10, m.y + 6, Stil.LEISE);
+        Ansicht.rechteck(g, m.x + 6, m.y + Menue.KOPF - 2, m.breite - 12, 1, Stil.LINIE);
         int hit = m.treffer(mx, my);
         for (int i = 0; i < m.eintraege.size(); i++) {
-            int y = m.y + 16 + i * Menue.ZEILE;
-            if (i == hit) Draw.roundRect(g, m.x + 2, y, Menue.BREITE - 4, Menue.ZEILE, 3, 0xE0C05090);
-            Draw.text(g, m.eintraege.get(i).text, m.x + 8, y + 3);
+            int y = m.y + Menue.KOPF + i * Menue.ZEILE;
+            if (i == hit) {
+                Draw.roundRect(g, m.x + 3, y, m.breite - 6, Menue.ZEILE, 3, Stil.ERHOBEN);
+                Ansicht.rechteck(g, m.x + 3, y + 3, 2, Menue.ZEILE - 6, Stil.akzent());
+            }
+            Stil.text(g, m.eintraege.get(i).text, m.x + 10, y + 4, Stil.TEXT);
         }
+    }
+
+    private static String titel(int bx, int bz) {
+        return bx + ", " + hoehe(bx, bz) + ", " + bz;
     }
 
     // Einträge je nach Stelle: auf einem eigenen Wegpunkt auch löschen
@@ -290,10 +298,12 @@ final class Vollbild {
         }));
         if (mc.player != null) l.add(new Eintrag(T.t("menue.entfernung"), () -> Notify.show(T.t("welt.entfernung"),
             T.t("welt.bloecke", Math.round(Math.hypot(bx + 0.5 - mc.player.getX(), bz + 0.5 - mc.player.getZ()))))));
-        var m = new Menue(0, 0, bx, bz, l);
+        int breite = Stil.breite(titel(bx, bz)) + 20;
+        for (var e : l) breite = Math.max(breite, Stil.breite(e.text) + 20);
+        var m = new Menue(0, 0, bx, bz, l, breite);
         // im Bild halten
-        int mxp = (int) Math.min(x, w - Menue.BREITE - 2), myp = (int) Math.min(y, h - m.hoehe() - 16);
-        menue = new Menue(Math.max(2, mxp), Math.max(2, myp), bx, bz, l);
+        int mxp = (int) Math.min(x, w - breite - 2), myp = (int) Math.min(y, h - m.hoehe() - 2);
+        menue = new Menue(Math.max(2, mxp), Math.max(2, myp), bx, bz, l, breite);
     }
 
     private Waypoints.Waypoint eigenerWegpunkt(double x, double y) {
@@ -306,90 +316,142 @@ final class Vollbild {
         return null;
     }
 
-    // ───── Knöpfe und Infoleiste ─────
+    // ───── Bedienelemente: Kartentyp oben links, „Anzeigen“ oben rechts, Folgen/Zoom links, Positionen unten ─────
+    private static final int RAND = 8, HOCH = 20;
+
     private void oberflaeche(GuiGraphicsExtractor g, int mx, int my) {
-        var font = Minecraft.getInstance().font;
         knoepfe.clear();
 
-        // oben: Kartentypen | Höhlenschicht | Filter | Gitter – in Zeilen, mittig
-        var oben = new ArrayList<Knopf>();
-        for (var t : Kartendaten.Typ.values())
-            oben.add(knopf(t.text(), T.t("knopf.typ", t.text()), typ == t, () -> setzeTyp(t)));
-        oben.add(null);
-        for (var art : Ansicht.Art.values())
-            oben.add(knopf(art.text(), T.t("knopf.anzeigen", art.text()), filter.zeigt(art), () -> filter.setze(art, !filter.zeigt(art))));
-        oben.add(knopf(T.t("knopf.koepfe"), T.t("knopf.koepfe.info"), filter.koepfe, () -> filter.setzeKoepfe(!filter.koepfe)));
-        oben.add(knopf(T.t("knopf.wegpunkte"), T.t("knopf.wegpunkte.info"), filter.wegpunkte, () -> filter.setzeWegpunkte(!filter.wegpunkte)));
-        oben.add(knopf(T.t("knopf.gitter"), T.t("knopf.gitter.info"), gitter, () -> cfg.set("fs_gitter", gitter = !gitter)));
-        if (SeedKarte.seed(SeedKarte.link()) != null)
-            oben.add(knopf(T.t("knopf.seed"), T.t("knopf.seed.info", SeedKarte.status()), seedAn, () -> cfg.set("fs_seed", seedAn = !seedAn)));
-        reihen(oben, 4);
+        // Kartentyp: ein Umschalter, der gewählte Teil in der Akzentfarbe
+        int gesamt = 4;
+        for (var t : Kartendaten.Typ.values()) gesamt += Stil.breite(t.text()) + 16;
+        Stil.panel(g, RAND, RAND, gesamt, HOCH + 4);
+        int x = RAND + 2;
+        for (var t : Kartendaten.Typ.values()) {
+            var k = neu(x, RAND + 2, Stil.breite(t.text()) + 16, HOCH, t.text(), T.t("knopf.typ", t.text()), typ == t, () -> setzeTyp(t));
+            boolean ueber = k.trifft(mx, my);
+            if (k.aktiv) Draw.roundRect(g, k.x, k.y, k.w, k.h, 3, Stil.akzent());
+            else if (ueber) Draw.roundRect(g, k.x, k.y, k.w, k.h, 3, Stil.ERHOBEN);
+            Stil.text(g, k.text, k.x + 8, k.y + 6, k.aktiv ? Stil.aufAkzent() : ueber ? Stil.TEXT : Stil.LEISE);
+            x += k.w;
+        }
 
-        // links: Folgen, Zoom
-        int ly = h / 2 - 40;
-        for (var k : List.of(
-            knopf("⌖", T.t("knopf.folgen"), folgen, () -> folgen = !folgen),
-            knopf("+", T.t("knopf.rein"), false, () -> zoom(1.5, w / 2.0, h / 2.0)),
-            knopf("−", T.t("knopf.raus"), false, () -> zoom(1 / 1.5, w / 2.0, h / 2.0)))) {
-            knoepfe.add(new Knopf(4, ly, 20, 18, k.text, k.tipp, k.aktiv, k.aktion));
-            ly += 22;
+        // „Anzeigen“: Ebenen hinter einem Knopf statt einer Reihe aus neun Schaltern
+        String titel = T.t("knopf.anzeigen.titel");
+        int aw = Stil.breite(titel) + 16, ax = sx0() + 16 - aw;   // rechts bündig mit der Slider-Leiste
+        var ak = neu(ax, RAND, aw, HOCH + 4, titel, T.t("knopf.anzeigen.info"), anzeigenOffen, () -> anzeigenOffen = !anzeigenOffen);
+        Draw.roundRect(g, ak.x, ak.y, ak.w, ak.h, Stil.RADIUS, anzeigenOffen || ak.trifft(mx, my) ? Stil.ERHOBEN : Stil.FLAECHE);
+        Stil.text(g, titel, ak.x + 8, ak.y + 8, Stil.TEXT);
+
+        // links: Folgen, hinein, hinaus – gezeichnete Symbole statt Schriftzeichen
+        int lw = 22, ly = h / 2 - lw * 3 / 2;
+        Stil.panel(g, RAND, ly, lw, lw * 3);
+        String[] tipps = {T.t("knopf.folgen"), T.t("knopf.rein"), T.t("knopf.raus")};
+        Runnable[] aktionen = {() -> folgen = !folgen, () -> zoom(1.5, w / 2.0, h / 2.0), () -> zoom(1 / 1.5, w / 2.0, h / 2.0)};
+        for (int i = 0; i < 3; i++) {
+            var k = neu(RAND, ly + i * lw, lw, lw, "", tipps[i], i == 0 && folgen, aktionen[i]);
+            boolean ueber = k.trifft(mx, my);
+            if (ueber) Draw.roundRect(g, k.x + 2, k.y + 2, lw - 4, lw - 4, 3, Stil.ERHOBEN);
+            if (i > 0) Ansicht.rechteck(g, k.x + 5, k.y, lw - 10, 1, Stil.LINIE);
+            int c = k.aktiv ? Stil.akzent() : Stil.TEXT, cx = k.x + lw / 2, cy = k.y + lw / 2;
+            if (i == 0) {                                   // Folgen: Ring mit Punkt
+                Draw.circle(g, cx, cy, 5, c);
+                Draw.circle(g, cx, cy, 3, ueber ? Stil.ERHOBEN : Stil.RAHMEN);
+                Draw.circle(g, cx, cy, 1, c);
+            } else {
+                Ansicht.rechteck(g, cx - 5, cy - 1, 10, 2, c);
+                if (i == 1) Ansicht.rechteck(g, cx - 1, cy - 5, 2, 10, c);
+            }
         }
 
         zeichneSlider(g, mx, my);
 
-        Knopf hover = null;
-        for (var k : knoepfe) {
-            boolean ueber = k.trifft(mx, my);
-            if (ueber) hover = k;
-            Draw.roundRect(g, k.x, k.y, k.w, k.h, 3, k.aktiv ? 0xE0C05090 : ueber ? 0xE0404048 : 0xD0202026);
-            Draw.text(g, k.text, k.x + (k.w - font.width(k.text)) / 2, k.y + (k.h - 8) / 2);
-        }
-
-        // unten: eigene Position und Position unter der Maus
+        // unten: deine Position links, die unter der Maus rechts
         var mc = Minecraft.getInstance();
-        Ansicht.rechteck(g, 0, h - 14, w, 14, 0xC0000000);
+        int fy = h - RAND - 18;
         var p = mc.player;
         if (p != null) {
             var b = p.blockPosition();
-            Draw.text(g, Component.literal(T.t("welt.du", b.getX() + ", " + b.getY() + ", " + b.getZ()) + " · ").append(Minimap.biom(b)), 6, h - 11);
+            fuss(g, RAND, fy, T.t("welt.du"), b.getX() + ", " + b.getY() + ", " + b.getZ(), Minimap.biom(b).getString(), false);
         }
         int bx = (int) Math.floor(a.wx(mx, my)), bz = (int) Math.floor(a.wz(mx, my));
-        Component maus = Component.literal(T.t("welt.maus", bx + ", " + bz));
+        String ort = bx + ", " + bz, biom = "";
         if (mc.level != null && mc.level.hasChunk(bx >> 4, bz >> 4)) {
             int by = mc.level.getHeight(Heightmap.Types.WORLD_SURFACE, bx, bz);
-            maus = Component.literal(T.t("welt.maus", bx + ", " + by + ", " + bz) + " · ").append(Minimap.biom(new BlockPos(bx, by, bz)));
+            ort = bx + ", " + by + ", " + bz;
+            biom = Minimap.biom(new BlockPos(bx, by, bz)).getString();
         }
-        Draw.text(g, maus, w - font.width(maus) - 6, h - 11);
+        fuss(g, w - RAND, fy, T.t("welt.maus"), ort, biom, true);
 
-        if (hover != null) Draw.tooltip(g, List.of(Component.literal(hover.tipp)), mx, my);
+        if (anzeigenOffen) anzeigen(g, ax + aw, RAND + HOCH + 8, mx, my);
+
+        Knopf hover = null;
+        for (var k : knoepfe) if (k.trifft(mx, my)) hover = k;
+        if (hover != null && hover.tipp != null) tipp(g, hover.tipp, mx, my);
     }
 
-    private Knopf knopf(String text, String tipp, boolean aktiv, Runnable aktion) {
-        return new Knopf(0, 0, Minecraft.getInstance().font.width(text) + 10, 16, text, tipp, aktiv, aktion);
+    private Knopf neu(int x, int y, int w, int h, String text, String tipp, boolean aktiv, Runnable aktion) {
+        var k = new Knopf(x, y, w, h, text, tipp, aktiv, aktion);
+        knoepfe.add(k);
+        return k;
     }
 
-    // Knöpfe zeilenweise mittig anordnen; null = kleine Lücke
-    private void reihen(List<Knopf> liste, int y) {
-        var zeile = new ArrayList<Knopf>();
-        int breite = 0;
-        for (int i = 0; i <= liste.size(); i++) {
-            Knopf k = i < liste.size() ? liste.get(i) : null;
-            int kw = k == null ? 8 : k.w + 2;
-            if (i == liste.size() || breite + kw > w - 8) {
-                int x = (w - breite) / 2;
-                for (var z : zeile) {
-                    if (z != null) knoepfe.add(new Knopf(x, y, z.w, z.h, z.text, z.tipp, z.aktiv, z.aktion));
-                    x += z == null ? 8 : z.w + 2;
-                }
-                zeile.clear();
-                breite = 0;
-                y += 18;
-            }
-            if (i < liste.size()) {
-                zeile.add(k);
-                breite += kw;
-            }
+    // Aufgeklappte Liste „Anzeigen“, rechtsbündig unter dem Knopf; Kästchen gefüllt = an (nicht nur über die Farbe)
+    private void anzeigen(GuiGraphicsExtractor g, int rechts, int y, int mx, int my) {
+        record Zeile(String text, boolean an, Runnable aktion) {}
+        var l = new ArrayList<Zeile>();
+        for (var art : Ansicht.Art.values()) l.add(new Zeile(art.text(), filter.zeigt(art), () -> filter.setze(art, !filter.zeigt(art))));
+        l.add(null);
+        l.add(new Zeile(T.t("knopf.koepfe"), filter.koepfe, () -> filter.setzeKoepfe(!filter.koepfe)));
+        l.add(new Zeile(T.t("knopf.wegpunkte"), filter.wegpunkte, () -> filter.setzeWegpunkte(!filter.wegpunkte)));
+        l.add(new Zeile(T.t("knopf.gitter"), gitter, () -> cfg.set("fs_gitter", gitter = !gitter)));
+        if (SeedKarte.seed(SeedKarte.link()) != null) l.add(new Zeile(T.t("knopf.seed"), seedAn, () -> cfg.set("fs_seed", seedAn = !seedAn)));
+        int bw = 0, hoch = 8;
+        for (var z : l) {
+            if (z != null) bw = Math.max(bw, Stil.breite(z.text));
+            hoch += z == null ? 7 : 16;
         }
+        bw += 36;
+        int x = rechts - bw;
+        Draw.dropShadow(g, x, y, bw, hoch, Stil.RADIUS, 0, 2, 6, 0x60000000);
+        Draw.roundRect(g, x, y, bw, hoch, Stil.RADIUS, Stil.RAHMEN);
+        int zy = y + 4;
+        for (var z : l) {
+            if (z == null) {
+                Ansicht.rechteck(g, x + 8, zy + 3, bw - 16, 1, Stil.LINIE);
+                zy += 7;
+                continue;
+            }
+            var k = neu(x + 3, zy, bw - 6, 16, z.text, null, z.an, z.aktion);
+            if (k.trifft(mx, my)) Draw.roundRect(g, k.x, k.y, k.w, k.h, 3, Stil.ERHOBEN);
+            if (z.an) {
+                Draw.roundRect(g, x + 10, zy + 3, 10, 10, 2, Stil.akzent());
+                Ansicht.rechteck(g, x + 13, zy + 6, 4, 4, Stil.aufAkzent());
+            } else {
+                Draw.roundRect(g, x + 10, zy + 3, 10, 10, 2, Stil.LINIE);
+                Draw.roundRect(g, x + 11, zy + 4, 8, 8, 2, Stil.RAHMEN);
+            }
+            Stil.text(g, z.text, x + 26, zy + 4, z.an ? Stil.TEXT : Stil.LEISE);
+            zy += 16;
+        }
+    }
+
+    // Feld unten: Bezeichnung leise, Koordinaten hell, Biom leise; rechts = an der rechten Kante ausgerichtet
+    private static void fuss(GuiGraphicsExtractor g, int x, int y, String name, String ort, String biom, boolean rechts) {
+        int b = Stil.breite(name) + 6 + Stil.breite(ort) + (biom.isEmpty() ? 0 : 8 + Stil.breite(biom)) + 16;
+        if (rechts) x -= b;
+        Stil.panel(g, x, y, b, 18);
+        int tx = x + 8;
+        tx += Stil.text(g, name, tx, y + 5, Stil.LEISE) + 6;
+        tx += Stil.text(g, ort, tx, y + 5, Stil.TEXT) + 8;
+        if (!biom.isEmpty()) Stil.text(g, biom, tx, y + 5, Stil.LEISE);
+    }
+
+    private void tipp(GuiGraphicsExtractor g, String text, int mx, int my) {
+        int tw = Stil.breite(text) + 12;
+        int x = Math.min(mx + 10, w - tw - 2), y = Math.min(my + 12, h - 18);
+        Draw.roundRect(g, x, y, tw, 16, 3, Stil.RAHMEN);
+        Stil.text(g, text, x + 6, y + 4, Stil.TEXT);
     }
 
     private void setzeTyp(Kartendaten.Typ t) {
@@ -427,6 +489,10 @@ final class Vollbild {
                     k.aktion.run();
                     return true;
                 }
+            if (anzeigenOffen) {                   // Klick neben die Liste schließt sie
+                anzeigenOffen = false;
+                return true;
+            }
             return false;                          // Karte: Ziehen übernimmt drag
         }
         if (!rechts) return false;
