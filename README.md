@@ -10,7 +10,7 @@
 | **Status** | 2026-10-26 |
 | **Build** | `build/libs/minimap.jar`, 123,611 bytes, SHA-256 `46af2c84c1a2704be098ed1e07bb05479e11d85ec48c867ffd3560f190a3d4d1` |
 | **Self-test** | `gradlew runTest`: 21 of 21 checks passed (2026-10-26, 12:11, client 7.1.03) |
-| **Download** | v1.5.0 not released yet. [Release v1.4.0](https://github.com/Minnito/minimap/releases/tag/v1.4.0) is built for API 6.2.1 and no longer loads on clients from 7.1.03 on |
+| **Download** | [Release v1.5.0](https://github.com/Minnito/minimap/releases/tag/v1.5.0) (API 7.1.03). Older releases up to v1.4.0 are built for API 6.2.1 and no longer load on clients from 7.1.03 on |
 
 ---
 
