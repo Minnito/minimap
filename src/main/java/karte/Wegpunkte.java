@@ -12,6 +12,8 @@ import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Pattern;
+import client.api.Friends;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.core.BlockPos;
@@ -94,9 +96,73 @@ final class Wegpunkte {
 
     // Sichtbare Wegpunkte dieser Dimension, je Tick neu (Karte.tick): all() kopiert und die Config-Abfragen kosten jedes Bild
     private static List<Waypoints.Waypoint> sichtbarHier = List.of();
+    static final String OBERWELT = "minecraft:overworld", NETHER = "minecraft:the_nether", ENDE = "minecraft:the_end";
 
+    // Jede Dimension hat ihre eigenen Wegpunkte: ein Oberwelt-Wegpunkt erscheint nur in der Oberwelt
     static void aktualisieren() {
         sichtbarHier = hier().stream().filter(Wegpunkte::sichtbar).toList();
+    }
+
+    // ───── Teilen: als Text im Chat oder an Freunde, und Koordinaten aus Nachrichten als Wegpunkt anbieten ─────
+    private static final Pattern MARKE = Pattern.compile("\\[MiniMap] (.{1,32}?) @ (-?\\d{1,8}) (-?\\d{1,4}) (-?\\d{1,8})(?: \\(([a-z0-9_.:/-]+)\\))?");
+    private static final Pattern BENANNT = Pattern.compile("(?i)(?<![a-z])x\\s*[:=]?\\s*(-?\\d{1,8})[,;\\s]+(?:y\\s*[:=]?\\s*(-?\\d{1,4})[,;\\s]+)?z\\s*[:=]?\\s*(-?\\d{1,8})");
+    // drei Zahlen hintereinander – aber nicht Teil einer längeren Zahlenreihe, keiner Uhrzeit (12:30) und keines Datums (27.10.2026)
+    private static final Pattern DREI = Pattern.compile("(?<![\\d.:]|\\d[ ,/]{1,3})(-?\\d{1,8})[ ,/]{1,3}(-?\\d{1,4})[ ,/]{1,3}(-?\\d{1,8})(?![\\d.:]|[ ,/]{1,3}-?\\d)");
+
+    /** Koordinaten aus einer Nachricht; y null = nicht genannt, dim null = nicht genannt. */
+    record Fund(String name, int x, Integer y, int z, String dim) {}
+
+    /** Erste Koordinatenangabe im Text oder null – rein, darum im Selbsttest geprüft. */
+    static Fund koordinaten(String text) {
+        var m = MARKE.matcher(text);
+        if (m.find()) return new Fund(m.group(1).trim(), zahl(m.group(2)), zahl(m.group(3)), zahl(m.group(4)), m.group(5));
+        m = BENANNT.matcher(text);
+        if (m.find()) return new Fund(null, zahl(m.group(1)), m.group(2) == null ? null : zahl(m.group(2)), zahl(m.group(3)), null);
+        m = DREI.matcher(text);
+        while (m.find()) {
+            int x = zahl(m.group(1)), y = zahl(m.group(2)), z = zahl(m.group(3));
+            // „3 5 7“ ist eher eine Aufzählung als ein Ort: mindestens eine Zahl zweistellig, Y in der Welthöhe
+            if (y >= -64 && y <= 320 && Math.max(Math.abs(x), Math.max(Math.abs(y), Math.abs(z))) >= 10) return new Fund(null, x, y, z, null);
+        }
+        return null;
+    }
+
+    private static int zahl(String s) {
+        return Integer.parseInt(s);
+    }
+
+    /** Text zum Teilen, den koordinaten() wieder liest. */
+    static String alsText(Waypoints.Waypoint w) {
+        return "[MiniMap] " + w.name() + " @ " + w.pos().getX() + " " + w.pos().getY() + " " + w.pos().getZ() + " (" + w.dimension() + ")";
+    }
+
+    private static String zuletztGesendet = "";
+    private static long gesendetUm, angebotenUm;
+    private static String angeboten = "";
+
+    /** Eigene Chat-Eingabe merken – kommt gleich als Chatnachricht zurück und soll dann kein Angebot auslösen. */
+    static void gesendet(String text) {
+        zuletztGesendet = text;
+        gesendetUm = System.currentTimeMillis();
+    }
+
+    /** Nachricht (Chat oder Freunde) mit Koordinaten: als Wegpunkt anbieten. */
+    static void anbieten(String text) {
+        long jetzt = System.currentTimeMillis();
+        if (Minecraft.getInstance().player == null || !AddonConfig.of(ADDON).bool("wp_chat", true)) return;
+        if (jetzt - gesendetUm < 5000 && !zuletztGesendet.isBlank() && text.contains(zuletztGesendet)) return;
+        var f = koordinaten(text);
+        if (f == null || (f.dim() != null && !f.dim().equals(Waypoints.dimension()))) return;   // andere Dimension: add() setzt nur hier
+        String ort = f.x() + ", " + (f.y() == null ? "" : f.y() + ", ") + f.z();
+        if (ort.equals(angeboten) && jetzt - angebotenUm < 10_000) return;                     // Server schicken manches doppelt
+        angeboten = ort;
+        angebotenUm = jetzt;
+        Notify.action(T.t("chat.titel"), T.t("chat.text", ort), new Notify.Button(T.t("chat.knopf"), () -> {
+            String name = freierName(f.name() == null || f.name().isBlank() ? T.t("chat.name") : f.name());
+            int y = f.y() != null ? f.y() : Vollbild.hoehe(f.x(), f.z());
+            Waypoints.add(name, new BlockPos(f.x(), y, f.z()), FARBEN[Waypoints.all().size() % FARBEN.length]);
+            Notify.show(T.t("wp.titel"), T.t("wp.bei", name, f.x() + ", " + f.z()));
+        }));
     }
 
     static List<Waypoints.Waypoint> sichtbarHier() {
@@ -104,8 +170,12 @@ final class Wegpunkte {
     }
 
     static List<Waypoints.Waypoint> hier() {
-        String dim = Waypoints.dimension();
-        return Waypoints.all().stream().filter(w -> w.dimension().equals(dim)).toList();
+        return nurIn(Waypoints.all(), Waypoints.dimension());
+    }
+
+    /** Nur die Wegpunkte der Dimension dim (null = außerhalb einer Welt: keine) – rein, darum im Selbsttest geprüft. */
+    static List<Waypoints.Waypoint> nurIn(List<Waypoints.Waypoint> alle, String dim) {
+        return alle.stream().filter(w -> w.dimension().equals(dim)).toList();
     }
 
     static String freierName(String basis) {
@@ -186,26 +256,90 @@ final class Wegpunkte {
     }
 
     // ───── Manager ─────
+    private String ansicht = OBERWELT;   // Dimension, deren Wegpunkte die Liste zeigt
+
+    /** Zur Auswahl im Manager: Oberwelt, Nether, Ende – dazu jede weitere, in der es Wegpunkte gibt (Datapacks, Server). */
+    static List<String> dimensionen(List<Waypoints.Waypoint> alle) {
+        var l = new ArrayList<>(List.of(OBERWELT, NETHER, ENDE));
+        for (var w : alle) if (!l.contains(w.dimension())) l.add(w.dimension());
+        return l;
+    }
+
+    /** Die Dimension nach dim in der Liste, nach der letzten wieder die erste. */
+    static String naechste(List<String> dims, String dim) {
+        return dims.get((dims.indexOf(dim) + 1) % dims.size());
+    }
+
+    static String dimName(String dim) {
+        return switch (dim) {
+            case OBERWELT -> T.t("dim.oberwelt");
+            case NETHER -> T.t("dim.nether");
+            case ENDE -> T.t("dim.ende");
+            default -> dim.substring(dim.indexOf(':') + 1);
+        };
+    }
+
     void oeffnen() {
+        ansicht = Waypoints.dimension() == null ? OBERWELT : Waypoints.dimension();   // beim Öffnen: wo du gerade bist
         Page.open(T.t("wp.liste"), () -> {
             var l = new ArrayList<Setting>();
-            l.add(Setting.button(T.t("wp.neu"), T.t("wp.neu.info"), T.t("wp.hinzu"), Wegpunkte::hierSetzen));
+            l.add(Setting.button(T.t("wp.neu"), T.t("wp.neu.info"), T.t("wp.hinzu"), () -> {
+                hierSetzen();
+                ansicht = Waypoints.dimension();   // der neue landet hier – also auch hier anzeigen
+            }));
             l.add(Setting.toggle(T.t("wp.inwelt"), T.t("wp.inwelt.info"), () -> inWelt, v -> cfg.set("wp_welt", inWelt = v)));
             l.add(Setting.choice(T.t("wp.entf"), null, ENTFERNUNG, () -> ENTFERNUNG.get(entfernung),
                 v -> cfg.set("wp_entfernung", entfernung = ENTFERNUNG.indexOf(v)), v -> T.t("wp.entf." + v)));
             l.add(Setting.toggle(T.t("wp.tod.an"), T.t("wp.tod.an.info"), () -> todAn, v -> cfg.set("wp_tod", todAn = v)));
             l.add(Setting.toggle(T.t("wp.tod.loeschen"), T.t("wp.tod.loeschen.info"), () -> todLoeschen,
                 v -> cfg.set("wp_tod_loeschen", todLoeschen = v)).visibleIf(() -> todAn));
-            var liste = new ArrayList<>(hier());
-            liste.sort(Comparator.comparingDouble(Wegpunkte::abstand));
-            l.add(Setting.heading(T.t(liste.isEmpty() ? "wp.keine" : "wp.diese")));
+            l.add(Setting.toggle(T.t("wp.chat"), T.t("wp.chat.info"), () -> cfg.bool("wp_chat", true), v -> cfg.set("wp_chat", v)));
+            String hierDim = Waypoints.dimension();
+            // Knopf statt Auswahl: Seiten aus Page.open baut der Client nur nach einem Knopf neu auf, nach einer Auswahl nicht –
+            // die Liste darunter bliebe sonst bei der alten Dimension stehen
+            var dims = dimensionen(Waypoints.all());
+            l.add(Setting.button(T.t("wp.dimension", dimName(ansicht) + (ansicht.equals(hierDim) ? T.t("wp.dimension.hier") : "")),
+                T.t("wp.dimension.info"), T.t("wp.dimension.weiter"), () -> ansicht = naechste(dims, ansicht)));
+            boolean hierDa = ansicht.equals(hierDim);
+            var liste = new ArrayList<>(nurIn(Waypoints.all(), ansicht));
+            // hier: die nächsten zuerst; in einer anderen Dimension sagt die Entfernung nichts – nach Name
+            liste.sort(hierDa ? Comparator.comparingDouble(Wegpunkte::abstand)
+                : Comparator.comparing(Waypoints.Waypoint::name, String.CASE_INSENSITIVE_ORDER));
+            l.add(Setting.heading(T.t(liste.isEmpty() ? "wp.keine" : "wp.diese", dimName(ansicht))));
             for (var w : liste) {
-                String info = w.pos().getX() + ", " + w.pos().getY() + ", " + w.pos().getZ() + " · " + entfernungText(abstand(w))
+                String info = w.pos().getX() + ", " + w.pos().getY() + ", " + w.pos().getZ() + (hierDa ? " · " + entfernungText(abstand(w)) : "")
                     + (sichtbar(w) ? "" : T.t("wp.ausgeblendet")) + (eigen(w) ? "" : T.t("wp.von", w.addon()));
                 l.add(eigen(w)
                     ? Setting.button("[" + symbol(w) + "] " + w.name(), info, T.t("wp.bearbeiten"), () -> bearbeiten(w.name()))
                     : Setting.info(() -> "[" + symbol(w) + "] " + w.name() + " – " + info));
             }
+            return l;
+        });
+    }
+
+    private static boolean freundeDa() {
+        try {
+            return Friends.available();
+        } catch (SecurityException e) {   // Berechtigung „friends“ nicht erteilt
+            return false;
+        }
+    }
+
+    // Freunde (Client-Freundesliste): Wegpunkt als Text schicken; beim Empfänger wird daraus über anbieten() ein Angebot
+    private static void anFreund(String name) {
+        Page.open(T.t("wp.freund"), () -> {
+            var l = new ArrayList<Setting>();
+            var freunde = Friends.list();
+            if (freunde.isEmpty()) l.add(Setting.info(() -> T.t("wp.freund.keine")));
+            for (var f : freunde)
+                l.add(Setting.button(f.name(), T.t(f.online() ? "wp.freund.online" : "wp.freund.offline"), T.t("wp.freund.senden"), () -> {
+                    Waypoints.Waypoint w = null;
+                    for (var x : Waypoints.all()) if (eigen(x) && x.name().equals(name)) w = x;
+                    if (w == null) return;
+                    String text = alsText(w);
+                    Friends.send(f.uuid(), text.length() > Friends.MAX_LENGTH ? text.substring(0, Friends.MAX_LENGTH) : text)
+                        .whenComplete((m, e) -> Notify.show(T.t("wp.titel"), T.t(e == null ? "wp.freund.ok" : "wp.freund.fehler", f.name())));
+                }));
             return l;
         });
     }
@@ -221,7 +355,11 @@ final class Wegpunkte {
         Page.open(start, () -> {
             var w = finde(name[0]);
             if (w == null) return List.of(Setting.info(() -> T.t("wp.geloescht")));
+            // Waypoints.add setzt immer in die aktuelle Dimension: Name, Farbe und Position (= löschen + neu anlegen)
+            // darum nur dort ändern, wo der Wegpunkt liegt – sonst würde er die Dimension wechseln
+            boolean hier = w.dimension().equals(Waypoints.dimension());
             return List.of(
+                Setting.info(() -> T.t("wp.anderedim", dimName(w.dimension()))).visibleIf(() -> !hier),
                 Setting.text(T.t("wp.name"), null, 32, () -> name[0], v -> {
                     var alt = finde(name[0]);
                     if (alt == null || v.isBlank() || v.equals(name[0])) return;
@@ -233,7 +371,7 @@ final class Wegpunkte {
                     cfg.set("wp_sym." + schluessel(n), sym);
                     cfg.set("wp_an." + schluessel(n), an);
                     name[0] = neu;
-                }),
+                }).visibleIf(() -> hier),
                 Setting.text(T.t("wp.symbol"), T.t("wp.symbol.info"), 2, () -> cfg.text("wp_sym." + schluessel(w), ""),
                     v -> cfg.set("wp_sym." + schluessel(w), v.trim())),
                 Setting.color(T.t("wp.farbe"), null, () -> w.argb() & 0xFFFFFF, v -> {
@@ -241,16 +379,20 @@ final class Wegpunkte {
                     if (alt == null) return;
                     Waypoints.remove(alt.name());
                     Waypoints.add(alt.name(), alt.pos(), 0xFF000000 | v);
-                }),
+                }).visibleIf(() -> hier),
                 Setting.toggle(T.t("wp.inwelt"), null, () -> sichtbar(w), v -> cfg.set("wp_an." + schluessel(w), v)),
-                Setting.info(() -> T.t("wp.position", w.pos().getX() + ", " + w.pos().getY() + ", " + w.pos().getZ(), entfernungText(abstand(w)))),
+                Setting.info(() -> hier
+                    ? T.t("wp.position", w.pos().getX() + ", " + w.pos().getY() + ", " + w.pos().getZ(), entfernungText(abstand(w)))
+                    : T.t("wp.position.dort", w.pos().getX() + ", " + w.pos().getY() + ", " + w.pos().getZ(), dimName(w.dimension()))),
                 Setting.button(T.t("wp.verschieben"), T.t("wp.verschieben.info"), T.t("wp.verschieben.knopf"), () -> {
                     var p = Minecraft.getInstance().player;
                     var alt = finde(name[0]);
                     if (p == null || alt == null) return;
                     Waypoints.remove(alt.name());
                     Waypoints.add(alt.name(), p.blockPosition(), alt.argb());
-                }),
+                }).visibleIf(() -> hier),
+                Setting.button(T.t("wp.freund"), T.t("wp.freund.info"), T.t("wp.freund.waehlen"), () -> anFreund(name[0]))
+                    .visibleIf(Wegpunkte::freundeDa),
                 Setting.button(T.t("wp.loeschen"), null, T.t("wp.loeschen"), () -> {
                     var alt = finde(name[0]);
                     if (alt != null) Waypoints.remove(alt.name());

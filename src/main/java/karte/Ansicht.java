@@ -99,7 +99,7 @@ final class Ansicht {
         }
     }
 
-    /** Welche Arten eine Karte zeigt – je Karte eigene Schalter (Präfix "mm_" / "fs_"). */
+    /** Welche Arten die Karten zeigen – ein gemeinsamer Filter für Minimap und Weltkarte (Präfix "fs_"). */
     static final class Filter {
         private final AddonConfig cfg;
         private final String prefix;
@@ -148,8 +148,9 @@ final class Ansicht {
         if (f.kandidatenTick != tick) {
             f.kandidatenTick = tick;
             f.kandidaten.clear();
+            double meinY = mc.player == null ? 0 : mc.player.getY();
             for (Entity e : mc.level.entitiesForRendering()) {
-                if (e == mc.player || !e.isAlive()) continue;
+                if (e == mc.player || !e.isAlive() || !inHoehe(e.getY() - meinY)) continue;   // weit über/unter dir: weglassen
                 Art a = Art.von(e);
                 if (a != null && f.zeigt(a)) f.kandidaten.add(e);
             }
@@ -159,22 +160,44 @@ final class Ansicht {
             if (rand.innen(sx(e.getX(), e.getZ()) - ox, sy(e.getX(), e.getZ()) - oy)) sichtbar.add(e);
         sichtbar.sort(Comparator.comparingDouble(e -> (e.getX() - cx) * (e.getX() - cx) + (e.getZ() - cz) * (e.getZ() - cz)));
         // von hinten nach vorn: die nächsten liegen oben
+        double meinY = mc.player == null ? 0 : mc.player.getY();
         for (int i = sichtbar.size() - 1; i >= 0; i--) {
             Entity e = sichtbar.get(i);
             Art a = Art.von(e);
             int x = Math.round(sx(e.getX(), e.getZ())), y = Math.round(sy(e.getX(), e.getZ()));
+            int schleier = schleier(e.getY() - meinY);
+            int h = kopf / 2;
             if (f.koepfe) {
-                int h = kopf / 2;
+                boolean gemalt;
                 if (a == Art.SPIELER) {
                     Ansicht.rechteck(g, x - h - 1, y - h - 1, kopf + 2, kopf + 2, 0xFF000000);
-                    if (Draw.head(g, e.getName().getString(), x - h, y - h, kopf)) continue;
-                } else if (Gesicht.zeichne(g, e, x, y, kopf)) continue;
+                    gemalt = Draw.head(g, e.getName().getString(), x - h, y - h, kopf);
+                } else gemalt = Gesicht.zeichne(g, e, x, y, kopf);
+                if (gemalt) {
+                    if (schleier != 0) Ansicht.rechteck(g, x - h - 1, y - h - 1, kopf + 2, kopf + 2, schleier);
+                    continue;
+                }
             }
             // Punkt in der Farbe der Art mit dunklem Rand, wie bei Xaero: Minimap (echte Pixel, kopf 12) 3×3, Weltkarte 2×2
             int p = kopf >= 12 ? 3 : 2;
             Ansicht.rechteck(g, x - p / 2 - 1, y - p / 2 - 1, p + 2, p + 2, 0xFF000000);
             Ansicht.rechteck(g, x - p / 2, y - p / 2, p, p, a.argb);
+            if (schleier != 0) Ansicht.rechteck(g, x - p / 2 - 1, y - p / 2 - 1, p + 2, p + 2, schleier);
         }
+    }
+
+    /** Kreaturen mehr als so viele Blöcke über oder unter dir zeigt das Radar gar nicht (Höhle unter dir, Meeresgrund unter dem Boot). */
+    static final int HOEHE_SICHT = 20;
+
+    static boolean inHoehe(double dy) {
+        return Math.abs(dy) <= HOEHE_SICHT;
+    }
+
+    /** Dunkler Schleier über Kreaturen über oder unter dir (ARGB, 0 = keiner): ab 6 Blöcken zunehmend, bei HOEHE_SICHT am stärksten. */
+    static int schleier(double dy) {
+        double d = Math.abs(dy) - 6;
+        if (d <= 0) return 0;
+        return (int) (Math.min(1, d / (HOEHE_SICHT - 6)) * 0xA0) << 24;
     }
 
     void wegpunkte(GuiGraphicsExtractor g, Filter f, Rand rand) {

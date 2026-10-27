@@ -31,9 +31,9 @@ import net.minecraft.world.level.storage.LevelResource;
 import net.minecraft.world.level.material.MapColor;
 
 // Kartendaten wie bei JourneyMap: geladene Chunks abtasten und je Block einen Pixel malen – in Kacheln zu 256 × 256 Blöcken,
-// getrennt nach Ebene (Tag, Nacht, Topo, Höhle je 16er-Schicht – alle Schichten in einem Durchlauf). Gespeichert als PNG unter
-// client-modules/karte/<welt>/<dimension>/<ebene>/<x>_<z>.png. Reihenfolge: Ringe um den Spieler, nächste zuerst, im Uhrzeigersinn.
-// ponytail: alle gesehenen Kacheln bleiben im Speicher (256 KB je Kachel und Ebene, ~27 Ebenen); bei riesigen Karten Kacheln außer Sicht entladen.
+// getrennt nach Ebene (Tag, Nacht, Topo; Höhlen auf jeder Y-Höhe liegen in Hoehlen). Gespeichert als PNG unter
+// <weltOrdner()>/<dimension>/<ebene>/<x>_<z>.png. Reihenfolge: Ringe um den Spieler, nächste zuerst, im Uhrzeigersinn.
+// ponytail: alle gesehenen Kacheln bleiben im Speicher (256 KB je Kachel und Ebene, 3 Ebenen); bei riesigen Karten Kacheln außer Sicht entladen.
 final class Kartendaten {
     static final int TILE = 256;
     // Zeitbudget je Tick statt fester Chunk-Zahl; Chunks erst nach 10 s erneut abtasten.
@@ -144,6 +144,7 @@ final class Kartendaten {
     private final Map<Long, Integer> gescannt = new HashMap<>();  // Chunk → Tick der letzten Abtastung
     private final BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
     private Path dir;               // Ordner der aktuellen Welt + Dimension, null = nicht in einer Welt
+    private ClientLevel welt;       // Welt, zu der dir gehört
     private int[] spiral = new int[0];
     private int cursor, centerX, centerZ, radius = -1, ticks, serial;
     private long version;           // steigt bei jeder Änderung – Minimap baut ihr Bild dann neu
@@ -166,9 +167,11 @@ final class Kartendaten {
         var mc = Minecraft.getInstance();
         ClientLevel level = mc.level;
         Path now = level == null ? null : weltOrdner().resolve(clean(level.dimension().identifier().toString()));
-        if (!Objects.equals(now, dir)) {
+        // auch neue Welt bei gleichem Ordner (Proxy wechselt den Server): sonst malt die neue Welt über die gemerkten Chunks der alten
+        if (!Objects.equals(now, dir) || level != welt) {
             close();
             dir = now;
+            welt = level;
             hoehlen.ordner(now);
         }
         if (dir == null || mc.player == null) return;
@@ -233,7 +236,7 @@ final class Kartendaten {
                     kopie.writeToFile(tmp);
                     ersetzen(tmp, file);
                 } catch (IOException e) {
-                    System.err.println("[minimap] Speichern fehlgeschlagen: " + file + " – " + e);
+                    Karte.fehler("Kachel nicht gespeichert", file + " – " + e);
                 }
             });
         }
@@ -468,9 +471,9 @@ final class Kartendaten {
     }
 
     /**
-     * Wo die Karte der aktuellen Welt liegt. Einzelspieler: im Weltordner (saves/<Welt>/karte) – wandert beim Umbenennen,
-     * Kopieren und Sichern mit und verschwindet mit der Welt. Server: in der Instanz je Server-Adresse (dort gibt es keinen Weltordner).
-     * Braucht die Berechtigung "files" (Schreiben außerhalb von client-modules/karte).
+     * Wo die Karte der aktuellen Welt liegt. Einzelspieler: im Weltordner (saves/<Welt>/minimap) – wandert beim Umbenennen,
+     * Kopieren und Sichern mit und verschwindet mit der Welt. Server: in der Instanz je Server-Adresse und Welt
+     * (client-modules/minimap/<server>/<seedhash>, siehe welt()). Braucht die Berechtigung "files" (Schreiben außerhalb von client-modules/minimap).
      */
     private static Object ordnerFuer;
     private static Path ordner;
@@ -478,15 +481,40 @@ final class Kartendaten {
     static Path weltOrdner() {
         var sp = Minecraft.getInstance().getSingleplayerServer();
         String name = worldName();
-        Object fuer = sp == null ? name : sp;          // je Welt einmal bestimmen (und ggf. umziehen), nicht jeden Tick
+        long hash = sp == null ? seedHash() : 0;
+        Object fuer = sp == null ? name + "|" + hash : sp;   // je Welt einmal bestimmen (und ggf. umziehen), nicht jeden Tick
         if (fuer.equals(ordnerFuer)) return ordner;
         ordnerFuer = fuer;
-        return ordner = bestimmeOrdner(sp, name);
+        return ordner = bestimmeOrdner(sp, name, hash);
     }
 
-    private static Path bestimmeOrdner(net.minecraft.client.server.IntegratedServer sp, String name) {
+    private static java.lang.reflect.Field zoomSeed;
+
+    /** Gehashter Seed der aktuellen Welt (BiomeManager.biomeZoomSeed – jeder Server schickt ihn dem Client mit); 0 = unbekannt. */
+    static long seedHash() {
+        var l = Minecraft.getInstance().level;
+        if (l == null) return 0;
+        try {
+            if (zoomSeed == null) {
+                var f = net.minecraft.world.level.biome.BiomeManager.class.getDeclaredField("biomeZoomSeed");
+                f.setAccessible(true);
+                zoomSeed = f;
+            }
+            return zoomSeed.getLong(l.getBiomeManager());
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return 0;
+        }
+    }
+
+    /** Unterordner einer Welt auf einem Server: hinter einem Proxy (Lobby, Survival …) teilen sich alle Welten eine Adresse. */
+    static String welt(long hash) {
+        return "welt_" + String.format("%016x", hash).substring(0, 8);
+    }
+
+    // ponytail: Server, die den Seed-Hash bei jedem Betreten neu würfeln, bekämen jedes Mal eine leere Karte – bisher nicht gesehen
+    private static Path bestimmeOrdner(net.minecraft.client.server.IntegratedServer sp, String name, long hash) {
         Path instanz = AddonConfig.dir(Karte.ID).resolve(name);
-        if (sp == null) return instanz;
+        if (sp == null) return hash == 0 ? instanz : serverWelt(instanz, instanz.resolve(welt(hash)));
         Path weltRoot = sp.getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize(), welt = weltRoot.resolve(Karte.ID);
         Umzug.ordner(weltRoot.resolve(Umzug.ALT), welt);                  // saves/<Welt>/karte → saves/<Welt>/minimap (alte Addon-ID)
         if (!Files.exists(welt) && Files.isDirectory(instanz)) {          // alte Karte aus der Instanz einmalig umziehen
@@ -494,9 +522,24 @@ final class Kartendaten {
                 Files.move(instanz, welt);
                 System.out.println("[minimap] Karte in den Weltordner umgezogen: " + welt);
             } catch (IOException e) {
-                System.err.println("[minimap] Umzug in den Weltordner fehlgeschlagen, Karte bleibt in der Instanz: " + e);
+                Karte.fehler("Umzug in den Weltordner fehlgeschlagen, Karte bleibt in der Instanz", e);
                 return instanz;
             }
+        }
+        return welt;
+    }
+
+    // Karten von vor 1.8.0 lagen direkt unter <server>/<dimension>: die erste Welt, die man dort betritt, übernimmt sie.
+    // Auf einem Server mit nur einer Welt ist das genau richtig; hinter einem Proxy waren sie ohnehin schon vermischt.
+    private static Path serverWelt(Path server, Path welt) {
+        if (Files.isDirectory(welt) || !Files.isDirectory(server)) return welt;
+        try (var alt = Files.list(server)) {
+            for (Path d : alt.filter(Files::isDirectory).filter(d -> !d.getFileName().toString().startsWith("welt_")).toList()) {
+                Files.createDirectories(welt);
+                Files.move(d, welt.resolve(d.getFileName()));
+            }
+        } catch (IOException e) {
+            Karte.fehler("Alte Server-Karte nicht übernommen", e);
         }
         return welt;
     }

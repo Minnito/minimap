@@ -63,15 +63,15 @@ final class Vollbild {
         }
     }
 
-    Vollbild(AddonConfig cfg, Kartendaten daten) {
+    Vollbild(AddonConfig cfg, Kartendaten daten, Ansicht.Filter filter) {
         this.cfg = cfg;
         this.daten = daten;
-        filter = new Ansicht.Filter(cfg, "fs_");
-        typ = Kartendaten.Typ.valueOf(cfg.text("fs_typ", "TAG"));
+        this.filter = filter;
+        typ = Karte.wahl(cfg, "fs_typ", Kartendaten.Typ.TAG);
         oberTyp = typ == Kartendaten.Typ.HOEHLE ? Kartendaten.Typ.TAG : typ;
         gitter = cfg.bool("fs_gitter", false);
         seedAn = cfg.bool("fs_seed", true);
-        seedModus = SeedKarte.Modus.valueOf(cfg.text("seed_modus", "GELAENDE"));
+        seedModus = Karte.wahl(cfg, "seed_modus", SeedKarte.Modus.GELAENDE);
         a.scale = cfg.decimal("fs_zoom", 1);
     }
 
@@ -86,7 +86,7 @@ final class Vollbild {
         Page.open(T.t("welt.titel"), new Page.View() {
             @Override
             public void draw(GuiGraphicsExtractor g, int w, int h, int mouseX, int mouseY) {
-                zeichne(g, w, h, mouseX, mouseY);
+                client.api.Profiler.section("minimap.weltkarte", () -> zeichne(g, w, h, mouseX, mouseY));
             }
 
             @Override
@@ -287,6 +287,12 @@ final class Vollbild {
         l.add(new Eintrag(T.t("menue.wp_setzen"), () -> wegpunkt(bx, bz)));
         if (manager != null) l.add(new Eintrag(T.t("menue.verwalten"), manager));
         l.add(new Eintrag(T.t("menue.kopieren"), () -> kopieren(bx, bz)));
+        // Portale verbinden: Nether-Block = Oberwelt-Block / 8
+        String dim = Waypoints.dimension();
+        if (Wegpunkte.OBERWELT.equals(dim))
+            l.add(new Eintrag(T.t("menue.nether"), () -> kopieren(Math.floorDiv(bx, 8) + " " + hoehe(bx, bz) + " " + Math.floorDiv(bz, 8))));
+        else if (Wegpunkte.NETHER.equals(dim))
+            l.add(new Eintrag(T.t("menue.oberwelt"), () -> kopieren(bx * 8 + " " + hoehe(bx, bz) + " " + bz * 8)));
         l.add(new Eintrag(T.t("menue.chat"), () -> {
             String text = bx + " " + hoehe(bx, bz) + " " + bz;
             mc.setScreenAndShow(new ChatScreen(text, false));
@@ -405,7 +411,7 @@ final class Vollbild {
         l.add(new Zeile(T.t("knopf.koepfe"), filter.koepfe, () -> filter.setzeKoepfe(!filter.koepfe)));
         l.add(new Zeile(T.t("knopf.wegpunkte"), filter.wegpunkte, () -> filter.setzeWegpunkte(!filter.wegpunkte)));
         l.add(new Zeile(T.t("knopf.gitter"), gitter, () -> cfg.set("fs_gitter", gitter = !gitter)));
-        if (SeedKarte.seed(SeedKarte.link()) != null) l.add(new Zeile(T.t("knopf.seed"), seedAn, () -> cfg.set("fs_seed", seedAn = !seedAn)));
+        if (SeedKarte.aktiverSeed() != null) l.add(new Zeile(T.t("knopf.seed"), seedAn, () -> cfg.set("fs_seed", seedAn = !seedAn)));
         int bw = 0, hoch = 8;
         for (var z : l) {
             if (z != null) bw = Math.max(bw, Stil.breite(z.text));
@@ -527,7 +533,10 @@ final class Vollbild {
     }
 
     private static void kopieren(int bx, int bz) {
-        String text = bx + " " + hoehe(bx, bz) + " " + bz;
+        kopieren(bx + " " + hoehe(bx, bz) + " " + bz);
+    }
+
+    private static void kopieren(String text) {
         Minecraft.getInstance().keyboardHandler.setClipboard(text);
         Notify.show(T.t("name"), T.t("welt.kopiert", text));
     }
@@ -538,7 +547,8 @@ final class Vollbild {
         Notify.show(T.t("wp.titel"), T.t("wp.bei", name, bx + ", " + bz));
     }
 
-    private static int hoehe(int bx, int bz) {
+    /** Oberfläche an (bx, bz), wenn der Chunk geladen ist, sonst deine Höhe. */
+    static int hoehe(int bx, int bz) {
         var mc = Minecraft.getInstance();
         if (mc.level != null && mc.level.hasChunk(bx >> 4, bz >> 4)) return mc.level.getHeight(Heightmap.Types.WORLD_SURFACE, bx, bz);
         return mc.player == null ? 64 : mc.player.getBlockY();

@@ -26,6 +26,23 @@ public final class Karte implements Module {
         Umzug.vonAlterId();   // vor der ersten Config/Taste: Daten der alten ID "karte" übernehmen
     }
 
+    /** Enum aus der Config; ein unbekannter Wert (umbenannt, von Hand geändert) gibt den Standard statt eines Absturzes beim Laden. */
+    static <E extends Enum<E>> E wahl(AddonConfig cfg, String key, E standard) {
+        try {
+            return Enum.valueOf(standard.getDeclaringClass(), cfg.text(key, standard.name()));
+        } catch (IllegalArgumentException e) {
+            return standard;
+        }
+    }
+
+    private static final java.util.Set<String> GEMELDET = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** Fehler, bei dem Daten verloren gehen können: ins Log und einmal je Art als Meldung (Faults.add ist dem Client vorbehalten). */
+    static void fehler(String was, Object detail) {
+        System.err.println("[minimap] " + was + ": " + detail);
+        if (GEMELDET.add(was)) client.api.Notify.show(T.t("fehler.titel"), T.t("fehler.text", was));
+    }
+
     private final AddonConfig cfg = AddonConfig.of(Karte.ID);
     private final KeyMapping weltKey = Keys.key(Karte.ID, "world", InputConstants.KEY_J);
     private final KeyMapping miniKey = Keys.key(Karte.ID, "minimap", InputConstants.KEY_M);
@@ -36,9 +53,26 @@ public final class Karte implements Module {
     private final KeyMapping wpListeKey = Keys.key(Karte.ID, "waypoints", InputConstants.KEY_N);
     private final Wegpunkte wegpunkte = new Wegpunkte(cfg);
     private final Kartendaten daten = new Kartendaten();
-    private final Minimap minimap = new Minimap(cfg, daten);
-    private final Vollbild vollbild = new Vollbild(cfg, daten);
+    // Ein Filter für Minimap und Weltkarte: was man auf der einen ein- oder ausblendet, gilt auf der anderen auch.
+    // Schlüssel der Weltkarte (fs_), damit bestehende Einstellungen dort gleich für die Minimap gelten.
+    private final Ansicht.Filter filter = new Ansicht.Filter(cfg, "fs_");
+    private final Minimap minimap = new Minimap(cfg, daten, filter);
+    private final Vollbild vollbild = new Vollbild(cfg, daten, filter);
     private int takt;
+
+    // Wegpunkt von einem Freund (Wegpunkte.alsText): wie Koordinaten aus dem Chat als Wegpunkt anbieten
+    private final client.api.Tasks.Handle freunde = freunde();
+
+    // Ohne Berechtigung „friends“ (abgelehnt) läuft die Karte trotzdem – nur ohne Wegpunkte von Freunden
+    private static client.api.Tasks.Handle freunde() {
+        try {
+            return client.api.Friends.onMessage(m -> {
+                if (!m.mine()) Wegpunkte.anbieten(m.text());
+            });
+        } catch (SecurityException e) {
+            return () -> {};
+        }
+    }
 
     {
         vollbild.manager = wegpunkte::oeffnen;
@@ -61,7 +95,19 @@ public final class Karte implements Module {
         if (++takt % 10 == 0) wegpunkte.ankunft();
         Wegpunkte.aktualisieren();
         minimap.tick();
-        daten.tick();
+        client.api.Profiler.section("minimap.abtasten", daten::tick);
+    }
+
+    @Override
+    public boolean chat(Component message) {
+        Wegpunkte.anbieten(message.getString());
+        return false;
+    }
+
+    @Override
+    public boolean send(String message) {
+        Wegpunkte.gesendet(message);
+        return false;
     }
 
     @Override
@@ -79,10 +125,12 @@ public final class Karte implements Module {
         wegpunkte.lebt();
         daten.close();
         Gesicht.leeren();
+        SeedKarte.vergessen();
     }
 
     @Override
     public void unload() {
+        freunde.cancel();
         daten.close();
         Kartendaten.gespeichert();   // Addon wird entladen: eingereihte Dateien noch schreiben
     }
@@ -123,6 +171,50 @@ public final class Karte implements Module {
             Testing.check(Wegpunkte.selbsttest(), "Wegpunkt anlegen, Symbol „T“, löschen, Entfernung „458,9m“");
             Testing.check(Long.valueOf(-123456789L).equals(SeedKarte.seed("https://www.chunkbase.com/apps/seed-map#seed=-123456789&platform=java_1_21_9&dimension=overworld&x=0&z=0&zoom=0.5"))
                 && Long.valueOf(42L).equals(SeedKarte.seed("42")) && SeedKarte.seed("hallo") == null, "Seed aus Chunkbase-Link lesen");
+            // Der Server schickt den gehashten Seed: daran erkennt die Karte die Welt und prüft den Chunkbase-Seed
+            long hash = Kartendaten.seedHash();
+            String linkVorher = SeedKarte.link();
+            SeedKarte.setzeLink("42");
+            boolean passt = Boolean.TRUE.equals(SeedKarte.passt());
+            SeedKarte.setzeLink("43");
+            boolean passtNicht = Boolean.FALSE.equals(SeedKarte.passt());
+            SeedKarte.setzeLink(linkVorher);
+            Testing.check(hash == net.minecraft.world.level.biome.BiomeManager.obfuscateSeed(42) && passt && passtNicht,
+                "Seed-Hash der Welt = Seed 42, Seed 43 passt nicht");
+            Testing.check(Kartendaten.weltOrdner().getFileName().toString().equals(Kartendaten.welt(hash)),
+                "Server-Welt im eigenen Ordner (" + Kartendaten.welt(hash) + ")");
+            String modusVorher = cfg.text("mm_modus", "AUTO");
+            cfg.set("mm_modus", "GIBTSNICHT");
+            boolean laedt;
+            try {
+                new Minimap(cfg, daten, filter);
+                laedt = true;
+            } catch (RuntimeException e) {
+                laedt = false;
+            }
+            cfg.set("mm_modus", modusVorher);
+            Testing.check(laedt && wahl(cfg, "gibtsnicht", Minimap.Modus.TOPO) == Minimap.Modus.TOPO, "Unbekannter Config-Wert → Standard");
+            Testing.check(koordinaten("123 64 -456", 123, 64, -456) && koordinaten("x: 12, z: -3", 12, null, -3)
+                    && koordinaten("X 100 Y 70 Z -200", 100, 70, -200) && koordinaten("[12:30] Bob: komm zu 250 70 -1300", 250, 70, -1300)
+                    && Wegpunkte.koordinaten("Preis 3 5 7 Euro") == null && Wegpunkte.koordinaten("am 27.10.2026 um 12:30") == null
+                    && Wegpunkte.koordinaten("1 2 3 4 5 6") == null
+                    && "Basis".equals(Wegpunkte.koordinaten(Wegpunkte.alsText(new client.api.Waypoints.Waypoint("Basis",
+                        new net.minecraft.core.BlockPos(10, 64, -20), Wegpunkte.OBERWELT, 0xFFFF0000, ID))).name()),
+                "Koordinaten aus dem Chat lesen");
+            var ow = new client.api.Waypoints.Waypoint("Haus", new net.minecraft.core.BlockPos(80, 64, 80), Wegpunkte.OBERWELT, 0xFFFF0000, ID);
+            var ne = new client.api.Waypoints.Waypoint("Portal", new net.minecraft.core.BlockPos(10, 64, 10), Wegpunkte.NETHER, 0xFFFF0000, ID);
+            Testing.check(Wegpunkte.nurIn(List.of(ow, ne), Wegpunkte.NETHER).equals(List.of(ne))
+                    && Wegpunkte.nurIn(List.of(ow, ne), Wegpunkte.OBERWELT).equals(List.of(ow)) && Wegpunkte.nurIn(List.of(ow, ne), null).isEmpty(),
+                "Wegpunkte nur in ihrer Dimension");
+            var eigene = new client.api.Waypoints.Waypoint("Burg", new net.minecraft.core.BlockPos(0, 64, 0), "meinpack:traumwelt", 0xFFFF0000, ID);
+            Testing.check(Wegpunkte.dimensionen(List.of(ow, eigene, ne)).equals(List.of(Wegpunkte.OBERWELT, Wegpunkte.NETHER, Wegpunkte.ENDE, "meinpack:traumwelt"))
+                    && Wegpunkte.dimName("meinpack:traumwelt").equals("traumwelt") && !Wegpunkte.dimName(Wegpunkte.ENDE).startsWith("minimap.")
+                    && Wegpunkte.naechste(Wegpunkte.dimensionen(List.of()), Wegpunkte.OBERWELT).equals(Wegpunkte.NETHER)
+                    && Wegpunkte.naechste(Wegpunkte.dimensionen(List.of()), Wegpunkte.ENDE).equals(Wegpunkte.OBERWELT),
+                "Manager: Oberwelt, Nether, Ende und weitere Dimensionen zur Auswahl");
+            Testing.check(Ansicht.schleier(3) == 0 && Ansicht.schleier(-12) != 0 && Ansicht.schleier(Ansicht.HOEHE_SICHT) >>> 24 == 0xA0
+                    && Ansicht.inHoehe(-20) && !Ansicht.inHoehe(25),
+                "Radar: Kreaturen über/unter dir blasser, ab 20 Blöcken weg");
             long t0 = System.nanoTime();
             String biom = SeedKarte.biomAn(42, 0, 0);
             System.out.println("[minimap] Seed 42, Block 0/0: " + biom + " (" + (System.nanoTime() - t0) / 1_000_000 + " ms inkl. Aufbau)");
@@ -193,13 +285,28 @@ public final class Karte implements Module {
                             if (w != null) Testing.command("tp @s " + w.pos().getX() + " " + w.pos().getY() + " " + w.pos().getZ());
                             Testing.await("Todespunkt beim Erreichen gelöscht", () -> Wegpunkte.todespunkt() == null, 100, () -> {
                                 Testing.command("tp @s " + start.getX() + " " + start.getY() + " " + start.getZ());
-                                Tasks.later(10, Testing::done);
+                                // Höhlendaten: speichern, alle Regionen aus dem Speicher werfen, beim nächsten Gebrauch von der Platte zurück
+                                Tasks.later(10, () -> {
+                                    int vorher = daten.hoehlen.farbe(start.getX(), start.getZ(), start.getY());
+                                    daten.save();
+                                    Kartendaten.gespeichert();
+                                    daten.hoehlen.allesEntladen();
+                                    boolean leer = daten.hoehlen.regionen() == 0;
+                                    Testing.await("Höhlen-Region gespeichert, entladen und wieder geladen",
+                                        () -> vorher != 0 && leer && daten.hoehlen.farbe(start.getX(), start.getZ(), start.getY()) == vorher,
+                                        100, Testing::done);
+                                });
                             });
                         });
                     });
                 });
             }));
         });
+    }
+
+    private static boolean koordinaten(String text, int x, Integer y, int z) {
+        var f = Wegpunkte.koordinaten(text);
+        return f != null && f.x() == x && java.util.Objects.equals(f.y(), y) && f.z() == z;
     }
 
     @Override

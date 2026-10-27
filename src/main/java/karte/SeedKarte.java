@@ -23,6 +23,7 @@ import net.minecraft.data.registries.VanillaRegistries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.level.LevelHeightAccessor;
 import net.minecraft.world.level.biome.Biome;
+import net.minecraft.world.level.biome.BiomeManager;
 import net.minecraft.world.level.biome.BiomeResolver;
 import net.minecraft.world.level.biome.BiomeSource;
 import net.minecraft.world.level.biome.MultiNoiseBiomeSource;
@@ -83,32 +84,81 @@ final class SeedKarte {
         return Minecraft.getInstance().getSingleplayerServer() == null ? null : Kartendaten.weltOrdner().resolve("chunkbase.txt");
     }
 
+    // Die Weltkarte fragt je Kachel und Bild nach dem Seed – Link und Seed darum je Welt einmal lesen, nicht jedes Mal von der Platte
+    private static Object linkFuer;      // Welt (ClientLevel), für die link/aktiv gelten
+    private static String linkText = "";
+    private static Long aktiv;
+    private static Boolean passt;        // Seed passt zum Seed-Hash der Welt; null = nicht prüfbar
+
+    private static void linkLesen() {
+        var level = Minecraft.getInstance().level;
+        if (level == linkFuer) return;
+        linkFuer = level;
+        linkText = level == null ? "" : linkVonPlatte();
+        aktiv = seed(linkText);
+        var sp = Minecraft.getInstance().getSingleplayerServer();
+        if (aktiv == null && sp != null) aktiv = sp.overworld().getSeed();   // Einzelspieler: den Seed kennt das Spiel selbst
+        long hash = Kartendaten.seedHash();
+        passt = aktiv == null || hash == 0 ? null : BiomeManager.obfuscateSeed(aktiv) == hash;
+    }
+
+    /** Link bzw. Seed neu lesen (Welt verlassen). */
+    static void vergessen() {
+        linkFuer = null;
+    }
+
     static String link() {
+        linkLesen();
+        return linkText;
+    }
+
+    /** Seed der Seed-Karte: aus dem Link, im Einzelspieler sonst der der Welt; null = keiner. */
+    static Long aktiverSeed() {
+        linkLesen();
+        return aktiv;
+    }
+
+    /** true/false = der Seed passt (nicht) zum Seed-Hash, den der Server schickt; null = nicht prüfbar. */
+    static Boolean passt() {
+        linkLesen();
+        return passt;
+    }
+
+    // Server: je Welt hinter der Adresse (Proxy: Lobby und Survival haben verschiedene Seeds), sonst wie früher je Adresse
+    private static String serverSchluessel() {
+        long hash = Kartendaten.seedHash();
+        return "chunkbase." + Kartendaten.worldName() + (hash == 0 ? "" : "." + Kartendaten.welt(hash));
+    }
+
+    private static String linkVonPlatte() {
         Path f = linkDatei();
         if (f != null) {                // Einzelspieler: nur die Datei der Welt – alte, namensbasierte Einträge würden neue Welten gleichen Namens erben
             if (!Files.exists(f)) return "";
             try {
                 return Files.readString(f).trim();
             } catch (IOException e) {
-                System.err.println("[minimap] Chunkbase-Link unlesbar: " + e);
+                Karte.fehler("Chunkbase-Link unlesbar", e);
                 return "";
             }
         }
-        String neu = AddonConfig.of(Karte.ID).text("chunkbase." + Kartendaten.worldName(), "");
+        var cfg = AddonConfig.of(Karte.ID);
+        String neu = cfg.text(serverSchluessel(), "");
+        if (neu.isEmpty()) neu = cfg.text("chunkbase." + Kartendaten.worldName(), "");                // bis 1.7.0: je Adresse
         return neu.isEmpty() ? AddonConfig.forServer(Karte.ID).text("chunkbase", "") : neu;   // früher gespeicherte Links weiter finden
     }
 
     static void setzeLink(String text) {
+        linkFuer = null;
         Path f = linkDatei();
         if (f == null) {
-            AddonConfig.of(Karte.ID).set("chunkbase." + Kartendaten.worldName(), text.trim());
+            AddonConfig.of(Karte.ID).set(serverSchluessel(), text.trim());
             return;
         }
         try {
             Files.createDirectories(f.getParent());
             Files.writeString(f, text.trim());
         } catch (IOException e) {
-            System.err.println("[minimap] Chunkbase-Link nicht gespeichert: " + e);
+            Karte.fehler("Chunkbase-Link nicht gespeichert", e);
         }
     }
 
@@ -125,11 +175,13 @@ final class SeedKarte {
     }
 
     static String status() {
-        Long s = seed(link());
+        Long s = aktiverSeed();
         if (s == null) return T.t(link().isBlank() ? "seed.kein" : "seed.keinimlink");
+        if (seed(link()) == null) return T.t("seed.welt", s);                 // Einzelspieler ohne Link: Seed der Welt
         var v = VERSION.matcher(link());
         String version = v.find() ? T.t("seed.chunkbase", v.group(1).replace('_', '.').replace("java.", "Java ")) : "";
-        return T.t("seed.status", s) + version + (erlaubt() ? "" : T.t("seed.aus"));
+        Boolean p = passt();
+        return T.t("seed.status", s) + version + (p == null ? "" : T.t(p ? "seed.passt" : "seed.passtnicht")) + (erlaubt() ? "" : T.t("seed.aus"));
     }
 
     static boolean erlaubt() {
@@ -143,7 +195,7 @@ final class SeedKarte {
      */
     Identifier textur(int tx, int tz, Modus modus, int massstab) {
         var mc = Minecraft.getInstance();
-        Long seed = seed(link());
+        Long seed = aktiverSeed();
         if (seed == null || mc.level == null || !erlaubt()) return null;
         String dim = mc.level.dimension().identifier().toString();
         String w = seed + "|" + dim + "|" + modus;
@@ -167,7 +219,7 @@ final class SeedKarte {
                     Files.createDirectories(datei.getParent());
                     img.writeToFile(datei);
                 } catch (IOException e) {
-                    System.err.println("[minimap] Seed-Kachel nicht gespeichert: " + e);
+                    Karte.fehler("Seed-Kachel nicht gespeichert", e);
                 }
             }
             NativeImage bild = img;
@@ -285,7 +337,7 @@ final class SeedKarte {
                 }
             return img;
         } catch (RuntimeException e) {
-            System.err.println("[minimap] Seed-Karte nicht berechenbar: " + e);
+            Karte.fehler("Seed-Karte nicht berechenbar", e);
             return null;
         }
     }

@@ -1,11 +1,11 @@
 {
   "name": "MiniMap",
   "developer": "Minnito",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "minecraft": ["26.3"],
   "api": "7.1.03",
   "main": "karte.Karte",
   "category": "minimap",
-  "permissions": ["files"],
+  "permissions": ["files", "friends"],
   "description": "Minimap und Weltkarte im Stil von JourneyMap/Xaero: Tag, Nacht, Topo, Höhlen auf jeder Y-Höhe, Radar mit Gesichtern, Wegpunkte, Seed-Karte aus Chunkbase-Link. Einzelspieler-Karten liegen im Weltordner (Berechtigung files). J = Weltkarte, M = Minimap."
 }

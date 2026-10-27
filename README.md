@@ -3,16 +3,43 @@
 | | |
 |---|---|
 | **Addon** | MiniMap (ID `minimap`) |
-| **Version** | 1.7.0 |
+| **Version** | 1.8.0 |
 | **Developer** | Minnito / Claude |
 | **Platform** | Client addon for the Swift Client, API 7.1.03, Minecraft 26.3 |
 | **Language / build** | Java 25 (`--release 25`), Gradle 9.4.1 (wrapper) |
 | **Status** | 2026-10-27 |
-| **Build** | `build/libs/minimap.jar`, 130,779 bytes, SHA-256 `f3f4cb902648c98a9aefcfce8234b1df2cefbc7a5457063fae471109f68af858` |
-| **Self-test** | `gradlew runTest`: 25 of 25 checks passed (2026-10-27, 00:00, client 7.1.03) |
-| **Download** | [Release v1.7.0](https://github.com/Minnito/minimap/releases/tag/v1.7.0) (API 7.1.03). Older releases up to v1.4.0 are built for API 6.2.1 and no longer load on clients from 7.1.03 on |
+| **Build** | `build/libs/minimap.jar`, 146,006 bytes, SHA-256 `dcf75af36879128bb96a4f5c5d4959aa779384e363051c8c75965de7df8b4a6b` |
+| **Self-test** | `gradlew runTest`: 33 of 33 checks passed (2026-10-27, 01:15, client 7.1.03) |
+| **Download** | [Release v1.8.0](https://github.com/Minnito/minimap/releases/tag/v1.8.0) (API 7.1.03). Older releases up to v1.4.0 are built for API 6.2.1 and no longer load on clients from 7.1.03 on |
 
 ---
+
+## What's new in 1.8.0
+
+From the ideas report `ideen-report-minimap.md`, adjusted after trying it in the game (see the last point under "New").
+
+### New
+- **Seed map in singleplayer without a link.** Without a Chunkbase link, the seed map uses the world's own seed.
+- **Seed check on servers.** Servers send every client a hash of the world seed. The Chunkbase settings page now says whether the entered seed matches this world ("matches this world" / "does NOT match this world").
+- **Height on the radar.** Creatures more than 6 blocks above or below you get darker; more than 20 blocks away they are not shown at all (cave below you, sea floor under your boat).
+- **One creature filter for both maps.** What the world map's "Show" list or the "Creatures & Waypoints" page switches (creature types, heads or dots, waypoints, names) applies to the minimap and the world map alike. The world map's existing settings are kept and now also apply to the minimap.
+- **Nether coordinates.** The world map's right-click menu can copy Nether coordinates (÷ 8) or Overworld coordinates (× 8). Waypoints themselves stay in their dimension: an Overworld waypoint shows only in the Overworld.
+- **Coordinates from chat.** When a chat message contains a location (`123 64 -456`, `x: 12 z: -3`, or the MiniMap share format), a notification offers "Add as waypoint". Your own messages, times and dates do not count.
+- **Send a waypoint to a friend** from the waypoint editor via the client's friend list; the friend gets the same "Add as waypoint" offer. Needs the new permission `friends`; without it, MiniMap still runs without this feature.
+- The switch for chat coordinates is in the waypoint manager.
+- Built and removed again after trying them: edge arrows to off-screen waypoints (they got in the way), a compass bar (the client has its own compass) and Overworld waypoints shown in the Nether at x/8, z/8 (waypoints stay in their dimension).
+- **Waypoint manager by dimension.** A "Dimension: …" button with "Switch ›" cycles the list through Overworld, The Nether and The End (plus any other dimension that has waypoints, e.g. from datapacks). It opens on the dimension you are in. Waypoints of another dimension are sorted by name instead of distance. Their symbol, visibility and deletion can be changed from anywhere; name, color and position only in their own dimension, because the client API always sets waypoints in the current dimension. It is a button rather than a choice because the client rebuilds `Page.open` pages only after a button, not after a choice or toggle.
+
+### Robustness
+- **Several worlds behind one server address** (proxy: lobby, survival …) now each get their own folder `<server>/welt_<seed hash>`. They used to paint over each other's map. A new world instance at the same folder also starts a fresh scan. Maps from before 1.8.0 move into the folder of the first world you join there.
+- **Unknown config values** (renamed or edited by hand) fall back to the default instead of stopping the addon from loading.
+- **Errors that can lose data** (map tile, cave data, Chunkbase link or seed tile not saved) now also show once per kind as a notification, not only in the log. The client's `Faults` is reserved for the client itself, so this goes through `Notify`.
+
+### Faster
+- **The world map no longer reads `chunkbase.txt` from disk** for every visible tile in every frame (singleplayer). Link and seed are read once per world.
+- **Cave data is kept per region, and unused regions are unloaded.** Regions nobody needed for a minute (not the scan, the minimap or the world map) leave memory; they come back from disk when needed. Saving only goes through changed regions instead of all chunks every 10 s.
+- **The square minimap draws the map tiles directly on the GPU** like the world map, in real screen pixels, instead of rebuilding up to 512² pixels on the CPU whenever you move. The circle (optionally rotated) stays on the CPU.
+- Timing points for the client profiler: `minimap.abtasten`, `minimap.kacheln`, `minimap.bild`, `minimap.hoehlenbild`, `minimap.weltkarte`.
 
 ## What's new in 1.7.0
 
@@ -105,19 +132,19 @@ A minimap and world map in the style of JourneyMap and Xaero's Minimap that runs
 
 ## 3. Architecture
 
-13 classes in package `karte`, 3,282 lines in total.
+13 classes in package `karte`, 3,733 lines in total.
 
 | Class | Lines | Purpose |
 |---|---:|---|
-| `Karte` | 230 | Entry point (`client.api.Module`): keys, HUD, settings, lifecycle (`join`, `leave`, `unload`), self-test |
-| `Kartendaten` | 529 | Scans loaded chunks and paints one pixel per block into tiles of 256 × 256 blocks, separated by layer. Order: rings around the player, nearest first. Time budget 4 ms per tick. All file reading and writing runs on one background thread (`minimap-dateien`) |
-| `Hoehlen` | 287 | Cave data for any Y level: per block column, the floors (solid block with air above) with color and ceiling. Any height can be derived from this instantly |
-| `Minimap` | 319 | Composes the minimap image on the CPU from the tiles; only recomputes when something changed. Frame, compass and info plates |
-| `Vollbild` | 566 | World map: segmented map type, "Show" list, zoom bar, Y slider, right-click menu, cross-fade, seed map as underlay |
-| `SeedKarte` | 477 | Biomes and terrain height from the seed via `MultiNoiseBiomeSource` / `NoiseBasedChunkGenerator`; thread pool, PNG cache, comparison against the real world |
-| `Ansicht` | 250 | World ↔ screen conversion (center, scale, rotation); shared drawing of waypoints, radar and player arrow |
+| `Karte` | 337 | Entry point (`client.api.Module`): keys, HUD, settings, lifecycle (`join`, `leave`, `unload`), self-test |
+| `Kartendaten` | 580 | Scans loaded chunks and paints one pixel per block into tiles of 256 × 256 blocks, separated by layer. Order: rings around the player, nearest first. Time budget 4 ms per tick. All file reading and writing runs on one background thread (`minimap-dateien`) , folder per world (seed hash) on servers |
+| `Hoehlen` | 326 | Cave data for any Y level: per block column, the floors (solid block with air above) with color and ceiling. Any height can be derived from this instantly . Kept per region; unused regions leave memory after a minute |
+| `Minimap` | 354 | Square: draws the tiles on the GPU; circle: composes the image on the CPU, only when something changed. Frame, compass and info plates |
+| `Vollbild` | 576 | World map: segmented map type, "Show" list, zoom bar, Y slider, right-click menu, cross-fade, seed map as underlay |
+| `SeedKarte` | 529 | Biomes and terrain height from the seed via `MultiNoiseBiomeSource` / `NoiseBasedChunkGenerator`; thread pool, PNG cache, comparison against the real world , seed check against the world's seed hash |
+| `Ansicht` | 273 | World ↔ screen conversion (center, scale, rotation); shared drawing of waypoints, radar and player arrow |
 | `Gesicht` | 115 | Creature face from its own texture: model part `head`, largest cube, front face. Works for all creatures without custom images |
-| `Wegpunkte` | 270 | In-world waypoints, the manager and the death point |
+| `Wegpunkte` | 412 | In-world waypoints, the manager, the death point, sharing via chat and friends |
 | `Biomfarben` | 38 | Biome colors as in Chunkbase/Amidst; unknown biomes get a fixed color derived from their name |
 | `Umzug` | 101 | One-time migration from the old ID `karte` to `minimap` (settings, folders, key bindings, waypoint owner) |
 | `Stil` | 73 | Colors, font and contrast of the map UI in one place; accent from the client's HUD color |
@@ -129,7 +156,7 @@ A minimap and world map in the style of JourneyMap and Xaero's Minimap that runs
 
 | What | Where |
 |---|---|
-| Map tiles | `client-modules/minimap/<world>/<dimension>/<layer>/<x>_<z>.png` |
+| Map tiles | `client-modules/minimap/<server>/welt_<seed hash>/<dimension>/<layer>/<x>_<z>.png` (servers) |
 | Singleplayer | inside the world folder under `<world>/minimap/` (permission `files`), so the map travels with the world |
 | Cave data | `<dimension>/hoehlen/<rx>_<rz>.bin` per region (32 × 32 chunks), gzip |
 | Seed cache | `seedkarte/<seed>_<dim>_<mode>_x<scale>_v2/` as PNG |
@@ -153,6 +180,7 @@ All work happened on 2026-10-25, from onboarding to the finished 1.3.0 build and
 10. **Version 1.5.1 (2026-10-26).** Found the cause of black bars on the world map reported on servers: servers sometimes send a chunk empty first, and the cave scan saved it as solid stone over good data. Empty chunks are now skipped and scanned again later. `runTest` passed 21 of 21 checks.
 11. **Version 1.6.0 (2026-10-26).** Death point built into MiniMap (first tried as a separate addon, then merged here so the point belongs to MiniMap and can be edited in the manager). `runTest` passed 24 of 24 checks.
 12. **Version 1.7.0 (2026-10-26/27).** Redesign of minimap and world map after a review against Apple's HIG and frontend design guidelines: before/after screenshots and per-frame timings from temporary hooks in the self-test (removed again). Per-tick caching kept where it measurably helped; caching the menu-font texts was within noise and reverted. Fixed the death point race and the drifting test player. `runTest` passed 25 of 25 checks, three runs in a row.
+13. **Version 1.8.0 (2026-10-27).** New ideas report (`ideen-report-minimap.md`) and all of it implemented, see "What's new in 1.8.0". The GPU-drawn square minimap was checked on a screenshot from a temporary test hook (removed again). Found on the way: `Friends` needs the permission `friends`, without it the addon did not load at all; now it loads either way.
 
 ## 5. Fixed bugs and implemented ideas
 
@@ -168,7 +196,7 @@ All work happened on 2026-10-25, from onboarding to the finished 1.3.0 build and
 
 ## 6. Tests
 
-`gradlew runTest` starts a local vanilla server (port 25598, seed 42, offline mode) and the game with the addon. The addon checks itself via `client.api.Testing`. Result from 2026-10-26 (check names are output by the addon in German, translated in brackets):
+`gradlew runTest` starts a local vanilla server (port 25598, seed 42, offline mode) and the game with the addon. The addon checks itself via `client.api.Testing`. Result from 2026-10-27 (check names are output by the addon in German, translated in brackets):
 
 ```
 PASS Drehung hin und zurück                              [rotation round trip]
@@ -181,6 +209,13 @@ PASS Übersetzungen geladen (de_DE: Minimap anzeigen)     [translations loaded]
 PASS Kontrast: Text, leiser Text und Schrift auf dem Akzent (E0679F, 5.6:1)  [contrast of text, muted text and text on the accent]
 PASS Wegpunkt anlegen, Symbol „T", löschen, Entfernung „458,9m"  [create waypoint, symbol, delete, distance]
 PASS Seed aus Chunkbase-Link lesen                       [read seed from Chunkbase link]
+PASS Seed-Hash der Welt = Seed 42, Seed 43 passt nicht    [world seed hash = seed 42, seed 43 does not match]
+PASS Server-Welt im eigenen Ordner (welt_c6f218bc)        [server world in its own folder]
+PASS Unbekannter Config-Wert → Standard                   [unknown config value → default]
+PASS Koordinaten aus dem Chat lesen                       [read coordinates from chat]
+PASS Wegpunkte nur in ihrer Dimension                     [waypoints only in their dimension]
+PASS Manager: Oberwelt, Nether, Ende und weitere Dimensionen zur Auswahl  [manager: Overworld, Nether, End and other dimensions to choose from]
+PASS Radar: Kreaturen über/unter dir blasser, ab 20 Blöcken weg  [radar: creatures above/below you dimmer, hidden beyond 20 blocks]
 PASS Biom aus Seed berechnet (dark_forest)               [biome computed from seed]
 PASS Gelände aus Seed gemalt (820 ms je Kachel)          [terrain painted from seed, 820 ms per tile]
 PASS Höhenansicht für jede Y-Höhe                        [view for any Y level]
@@ -196,6 +231,7 @@ PASS Seed-Höhen = Welt ±2 (25/25)                        [seed heights = world
 PASS Todespunkt gesetzt                                  [death point set]
 PASS Wiederbelebt, Todespunkt noch da                    [respawned, death point still there]
 PASS Todespunkt beim Erreichen gelöscht                  [death point deleted on arrival]
+PASS Höhlen-Region gespeichert, entladen und wieder geladen  [cave region saved, unloaded and loaded again]
 ```
 
 The GitHub Action (`.github/workflows/build.yml`) only builds the jar on every push. `runTest` needs OpenGL and therefore runs locally.
@@ -206,8 +242,11 @@ These shortcuts are deliberate and marked with `ponytail:` in the code:
 
 - **Tiles stay in memory.** All seen tiles stay loaded until the world changes (256 KB per tile and layer). For very large maps, tiles out of view should be unloaded (`Kartendaten`).
 - **Seed map without structures.** Trees, villages, buildings and lakes above sea level are missing because they would require full chunk generation (`SeedKarte`).
-- **Minimap rebuild.** With a large minimap and high GUI scale, up to 512² pixels per rebuild, but only when moving by at least 1 pixel (`Minimap`).
+- **Minimap rebuild (circle only).** With a large round minimap and high GUI scale, up to 512² pixels per rebuild, but only when moving by at least 1 pixel (`Minimap`). The square one draws tiles on the GPU.
 - **Face cache.** If a creature changes its variant, this only shows after a world change (`Gesicht`).
+- **Death point self-test is timing-dependent.** In 1 of 11 runs on 2026-10-27, "Todespunkt beim Erreichen gelöscht" failed: the test teleports back to the death point right after a respawn the server may not have confirmed yet. The addon's own check is unaffected; the test needs a firmer wait for the respawn.
+- **World folders by seed hash.** A server that re-rolls the seed hash on every join would get an empty map each time; not seen so far (`Kartendaten`).
+- **Error notifications** name the error in German (it comes from the code, not the language files); the notification text around it is translated.
 
 Still open from the ideas report: shut down seed threads on `.addon reload`, structures from the seed, seed terrain on the minimap, export the map as an image.
 

@@ -3,6 +3,7 @@ package karte;
 import client.api.AddonConfig;
 import client.api.Draw;
 import client.api.HudElement;
+import client.api.Profiler;
 import client.api.Setting;
 import com.mojang.blaze3d.platform.NativeImage;
 import java.util.ArrayList;
@@ -52,10 +53,10 @@ final class Minimap {
     private int bildRes;
     private Object[] zuletzt = {};   // Stand des letzten Bildes – nur neu rechnen, wenn sich etwas geändert hat
 
-    Minimap(AddonConfig cfg, Kartendaten daten) {
+    Minimap(AddonConfig cfg, Kartendaten daten, Ansicht.Filter filter) {
         this.cfg = cfg;
         this.daten = daten;
-        filter = new Ansicht.Filter(cfg, "mm_");
+        this.filter = filter;
         an = cfg.bool("mm_an", true);
         kreis = cfg.bool("mm_kreis", false);
         drehen = cfg.bool("mm_drehen", false);
@@ -63,9 +64,9 @@ final class Minimap {
         gitter = cfg.bool("mm_gitter", false);
         size = cfg.number("size", 128);
         zoom = Math.clamp(cfg.number("mm_zoomstufe", 2), 0, ZOOM.length - 1);
-        modus = Modus.valueOf(cfg.text("mm_modus", "AUTO"));
+        modus = Karte.wahl(cfg, "mm_modus", Modus.AUTO);
         Info[] std = {Info.LEER, Info.ZEIT, Info.ORT, Info.BIOM};
-        for (int i = 0; i < 4; i++) slots[i] = Info.valueOf(cfg.text("mm_info" + i, std[i].name()));
+        for (int i = 0; i < 4; i++) slots[i] = Karte.wahl(cfg, "mm_info" + i, std[i]);
     }
 
     void tick() {
@@ -157,8 +158,11 @@ final class Minimap {
         }
         // Wie Xaero: Karte und Markierungen in echten Bildschirmpixeln, unabhängig von der GUI-Skalierung
         float k = mc.getWindow().getGuiScale();
-        bild(a, ebene(), Math.min(512, Math.round(size * k)));
-        Draw.image(g, bildId, x, my, size, size, bildRes, bildRes);
+        var e = ebene();
+        if (kreis) {
+            Profiler.section("minimap.bild", () -> bild(a, e, Math.min(512, Math.round(size * k))));
+            Draw.image(g, bildId, x, my, size, size, bildRes, bildRes);
+        } else Profiler.section("minimap.kacheln", () -> Draw.clip(g, x, my, size, size, () -> kacheln(g, a, e, x, my, k)));
 
         g.pose().pushMatrix();
         g.pose().scale(1 / k, 1 / k);
@@ -236,7 +240,38 @@ final class Minimap {
             .orElse(Component.literal("?"));
     }
 
-    // Kartenbild auf der CPU zusammensetzen: so gehen Kreisform und Drehung ohne Schablonen-Tricks
+    // Quadrat (nie gedreht): die Kacheltexturen direkt zeichnen wie die Weltkarte – kein Neuaufbau beim Laufen, nur der Ausschnitt.
+    // In echten Bildschirmpixeln, damit die Karte beim Gehen gleitet statt in GUI-Pixeln zu springen.
+    private void kacheln(GuiGraphicsExtractor g, Ansicht a, Kartendaten.Ebene e, int x, int y, float k) {
+        Ansicht.rechteck(g, x, y, size, size, 0xFF101014);              // unerkundet
+        daten.hoehlen.budget(2);                                        // neue Höhlenbilder (deine Höhe) portionsweise
+        daten.uebersichtBudget(1);
+        boolean grob = a.scale < 0.5 && e.typ() != Kartendaten.Typ.HOEHLE;   // weit draußen: Übersichten wie auf der Weltkarte
+        int span = Kartendaten.TILE * (grob ? Kartendaten.UEBERSICHT : 1);
+        double halb = size / 2.0 / a.scale;                             // Blöcke von der Mitte bis zum Rand
+        int t0x = Math.floorDiv((int) Math.floor(a.cx - halb), span), t1x = Math.floorDiv((int) Math.floor(a.cx + halb), span);
+        int t0z = Math.floorDiv((int) Math.floor(a.cz - halb), span), t1z = Math.floorDiv((int) Math.floor(a.cz + halb), span);
+        var r = new Ansicht();                                          // ungedreht, Norden oben, in echten Pixeln
+        r.cx = a.cx;
+        r.cz = a.cz;
+        r.scale = a.scale * k;
+        r.ox = a.ox * k;
+        r.oy = a.oy * k;
+        g.pose().pushMatrix();
+        g.pose().scale(1 / k, 1 / k);
+        for (int tz = t0z; tz <= t1z; tz++)
+            for (int tx = t0x; tx <= t1x; tx++) {
+                var id = grob ? daten.uebersicht(e, tx, tz) : daten.textur(e, tx, tz);
+                if (id == null) continue;
+                int x0 = Math.round(r.sx((double) tx * span, 0)), x1 = Math.round(r.sx((double) (tx + 1) * span, 0));
+                int y0 = Math.round(r.sy(0, (double) tz * span)), y1 = Math.round(r.sy(0, (double) (tz + 1) * span));
+                Draw.image(g, id, x0, y0, x1 - x0, y1 - y0, 0, 0, Kartendaten.TILE, Kartendaten.TILE, Kartendaten.TILE, Kartendaten.TILE, 0xFFFFFFFF);
+            }
+        if (gitter) r.gitter(g, Math.round(x * k), Math.round(y * k), Math.round(size * k), Math.round(size * k));
+        g.pose().popMatrix();
+    }
+
+    // Kartenbild auf der CPU zusammensetzen (nur Kreis): so gehen Kreisform und Drehung ohne Schablonen-Tricks
     // ponytail: bei großer Karte und hoher GUI-Skalierung bis 512² Pixel je Neuaufbau; nur bei Bewegung um ≥ 1 Bildpunkt neu
     private void bild(Ansicht a, Kartendaten.Ebene e, int res) {
         if (bild == null || bildRes != res) {
